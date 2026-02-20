@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Env
+.env
+
+# Chroma
+.chroma/
+
+# Repo cache
+.cache/
+
+# Node
+node_modules/
+dist/
+build/
+.next/
