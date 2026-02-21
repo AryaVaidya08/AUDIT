@@ -110,7 +110,7 @@ class ChromaStore:
         self._code_chunks = self._client.get_collection(name=self._code_chunks.name)
         return len(chunks)
 
-    def query_security_kb(self, query_text: str, top_k: int = 5) -> list[RetrievalHit]:
+    def query_security_kb(self, query_text: str, top_k: int = 5, min_score: float | None = None) -> list[RetrievalHit]:
         if not query_text.strip():
             return []
 
@@ -126,13 +126,14 @@ class ChromaStore:
         documents = (result.get("documents") or [[]])[0]
         distances = (result.get("distances") or [[]])[0]
 
+        threshold = KB_SCORE_THRESHOLD if min_score is None else min(max(min_score, 0.0), 1.0)
         hits: list[RetrievalHit] = []
         for index, doc_id in enumerate(ids):
             metadata = metadatas[index] if index < len(metadatas) else {}
             distance = float(distances[index]) if index < len(distances) else 1.0
             raw_preview = documents[index] if index < len(documents) else ""
             score = 1.0 / (1.0 + max(distance, 0.0))
-            if score < KB_SCORE_THRESHOLD:
+            if score < threshold:
                 continue
 
             tags_value = metadata.get("tags", "") if isinstance(metadata, dict) else ""

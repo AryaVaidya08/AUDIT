@@ -11,7 +11,7 @@ from app.embed.embeddings import TextEmbedder
 from app.ingest.repo_loader import collect_files
 from app.parse.chunkers import chunk_sources
 from app.scan.kb_loader import load_kb_documents
-from app.scan.scanner import scan_chunks
+from app.scan.scan_repo import scan_repo as run_scan_repo
 from app.scan.schema import IndexReport, IndexRequest, RetrievalSample, ScanReport, ScanRequest, SourceFile
 from app.vectorstore.chroma_store import ChromaCollections, ChromaStore
 
@@ -36,11 +36,20 @@ def scan_local_repo(payload: ScanRequest) -> ScanReport:
         raise HTTPException(status_code=404, detail="local_path does not exist")
     if not repo_path.is_dir():
         raise HTTPException(status_code=400, detail="local_path must be a directory")
-
-    raw_files = collect_files(root=repo_path)
-    source_files = [SourceFile(**item) for item in raw_files]
-    chunks = chunk_sources(source_files, chunk_size_lines=settings.chunk_size_lines)
-    return scan_chunks(chunks)
+    try:
+        return run_scan_repo(
+            path=repo_path,
+            top_k=settings.scan_top_k,
+            threshold=settings.scan_similarity_threshold,
+            max_chunks=settings.scan_max_chunks,
+            repair_retries=settings.scan_repair_retries,
+            model=settings.scan_model,
+            chunk_size_lines=settings.chunk_size_lines,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except NotADirectoryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _resolve_from_project(raw_path: str) -> Path:

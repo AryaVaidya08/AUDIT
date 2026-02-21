@@ -20,6 +20,15 @@ def _parse_int(raw: str | None, fallback: int) -> int:
         return fallback
 
 
+def _parse_float(raw: str | None, fallback: float) -> float:
+    if not raw:
+        return fallback
+    try:
+        return float(raw)
+    except ValueError:
+        return fallback
+
+
 def _parse_bool(raw: str | None, fallback: bool) -> bool:
     if raw is None:
         return fallback
@@ -48,6 +57,11 @@ class Settings:
     embedding_batch_size: int
     retrieval_top_k: int
     debug_retrieval: bool
+    scan_model: str
+    scan_top_k: int
+    scan_similarity_threshold: float
+    scan_max_chunks: int
+    scan_repair_retries: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -138,6 +152,11 @@ class Settings:
             embedding_batch_size=_parse_int(os.getenv("EMBEDDING_BATCH_SIZE"), 64),
             retrieval_top_k=_parse_int(os.getenv("RETRIEVAL_TOP_K"), 5),
             debug_retrieval=_parse_bool(os.getenv("DEBUG_RETRIEVAL"), False),
+            scan_model=os.getenv("SCAN_MODEL", "gpt-4.1-mini"),
+            scan_top_k=_parse_int(os.getenv("SCAN_TOP_K"), 5),
+            scan_similarity_threshold=_parse_float(os.getenv("SCAN_SIMILARITY_THRESHOLD"), 0.2),
+            scan_max_chunks=_parse_int(os.getenv("SCAN_MAX_CHUNKS"), 300),
+            scan_repair_retries=_parse_int(os.getenv("SCAN_REPAIR_RETRIES"), 1),
         )
 
 

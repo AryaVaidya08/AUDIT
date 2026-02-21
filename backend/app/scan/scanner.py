@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Literal, Pattern
 
-from app.scan.schema import CodeChunk, Finding, ScanReport
+from app.scan.schema import CodeChunk, Finding, ScanMetadata, ScanReport, ScanStats
 
 
 @dataclass(frozen=True)
@@ -68,18 +69,21 @@ RULES: tuple[HeuristicRule, ...] = (
 
 def _build_finding(rule: HeuristicRule, chunk: CodeChunk, line_number: int, line: str) -> Finding:
     return Finding(
-        rule_id=rule.rule_id,
-        title=rule.title,
+        vuln_type=rule.rule_id,
         severity=rule.severity,
+        confidence=0.6,
+        references=[],
         file_path=chunk.file_path,
         start_line=line_number,
         end_line=line_number,
-        snippet=line.strip()[:300],
-        description=rule.description,
+        message=rule.title,
+        evidence=line.strip()[:300],
+        recommendation=rule.description,
     )
 
 
 def scan_chunks(chunks: list[CodeChunk]) -> ScanReport:
+    started = datetime.now(timezone.utc)
     findings: list[Finding] = []
     seen: set[tuple[str, str, int]] = set()
 
@@ -97,4 +101,24 @@ def scan_chunks(chunks: list[CodeChunk]) -> ScanReport:
                 findings.append(_build_finding(rule=rule, chunk=chunk, line_number=absolute_line, line=line))
 
     file_count = len({chunk.file_path for chunk in chunks})
-    return ScanReport(findings=findings, files_scanned=file_count, chunks_scanned=len(chunks))
+    finished = datetime.now(timezone.utc)
+    return ScanReport(
+        metadata=ScanMetadata(
+            repo_path="(heuristic-scan)",
+            scan_started_at=started,
+            scan_finished_at=finished,
+            model="heuristic-ruleset",
+            top_k=1,
+            similarity_threshold=0.0,
+            max_chunks=len(chunks),
+            chunk_size_lines=120,
+            repair_retries=0,
+        ),
+        stats=ScanStats(
+            files_scanned=file_count,
+            chunks_considered=len(chunks),
+            findings_before_dedup=len(findings),
+            findings_after_dedup=len(findings),
+        ),
+        findings=findings,
+    )
