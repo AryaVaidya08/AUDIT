@@ -10,6 +10,9 @@ except ImportError:  # pragma: no cover - optional runtime dependency
 from app.embed.embeddings import TextEmbedder
 from app.scan.schema import CodeChunk, KBDocument, RetrievalHit
 from app.utils.hash import code_chunk_id
+import os
+
+KB_SCORE_THRESHOLD = float(os.getenv("KB_SCORE_THRESHOLD", 0.2))
 
 
 @dataclass(frozen=True)
@@ -129,6 +132,9 @@ class ChromaStore:
             distance = float(distances[index]) if index < len(distances) else 1.0
             raw_preview = documents[index] if index < len(documents) else ""
             score = 1.0 / (1.0 + max(distance, 0.0))
+            if score < KB_SCORE_THRESHOLD:
+                continue
+
             tags_value = metadata.get("tags", "") if isinstance(metadata, dict) else ""
             tags = [tag.strip() for tag in str(tags_value).split(",") if tag.strip()]
             hits.append(
