@@ -9,6 +9,7 @@ __pycache__/
 
 # Env
 .env
+.env.local
 
 # Chroma
 .chroma/
