@@ -26,8 +26,10 @@ pip install fastapi uvicorn chromadb openai pytest
 From the repository root, run:
 
 ```bash
-python -m audit.scan_repo ./demo_vuln_repo
+python -m audit.scan_repo
 ```
+
+By default, this scans `test_repo/`. You can also pass an explicit path.
 
 Optional flags:
 
@@ -109,6 +111,7 @@ Response includes:
 
 - Files are chunked into 120-line blocks by default.
 - Include/exclude behavior and limits are configurable via environment variables in `.env.example`.
+- The app auto-loads repo-root `.env` and `.env.local` values on startup.
 - If `OPENAI_API_KEY` is missing, embeddings fall back to deterministic local vectors and LLM audit calls are skipped gracefully.
 
 ## Scan Environment Variables

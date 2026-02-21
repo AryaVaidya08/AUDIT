@@ -2,6 +2,55 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+
+def _parse_env_line(raw_line: str) -> tuple[str, str] | None:
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        return None
+    if line.startswith("export "):
+        line = line[len("export ") :].strip()
+    if "=" not in line:
+        return None
+    key, value = line.split("=", 1)
+    key = key.strip()
+    if not key:
+        return None
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+    return key, value
+
+
+def _load_env_file(path: Path, original_keys: set[str], override: bool) -> None:
+    if not path.exists() or not path.is_file():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+
+    for raw_line in lines:
+        parsed = _parse_env_line(raw_line)
+        if parsed is None:
+            continue
+        key, value = parsed
+        if key in original_keys:
+            continue
+        if not override and key in os.environ:
+            continue
+        os.environ[key] = value
+
+
+def _autoload_repo_env() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    original_keys = set(os.environ.keys())
+    _load_env_file(repo_root / ".env", original_keys=original_keys, override=False)
+    _load_env_file(repo_root / ".env.local", original_keys=original_keys, override=True)
+
+
+_autoload_repo_env()
 
 
 def _parse_csv(raw: str | None, fallback: tuple[str, ...]) -> tuple[str, ...]:
