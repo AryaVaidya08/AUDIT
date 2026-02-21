@@ -67,7 +67,14 @@ def test_scan_repo_retries_then_skips_parse_error_and_dedups(monkeypatch: object
     monkeypatch.setattr(scan_repo_module, "TextEmbedder", _FakeEmbedder)
     monkeypatch.setattr(scan_repo_module, "ChromaStore", _HighScoreStore)
 
-    def _fake_audit(chunk: CodeChunk, kb_hits: list[RetrievalHit], model: str, repair_retries: int) -> ChunkAuditResult:
+    def _fake_audit(
+        chunk: CodeChunk,
+        kb_hits: list[RetrievalHit],
+        model: str,
+        repair_retries: int,
+        timeout_seconds: float | None = None,
+    ) -> ChunkAuditResult:
+        _ = (kb_hits, model, repair_retries, timeout_seconds)
         if chunk.file_path == "src/a.py":
             return ChunkAuditResult(
                 findings=[],

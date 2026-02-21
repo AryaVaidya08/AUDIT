@@ -4,8 +4,8 @@ from dataclasses import dataclass
 
 try:
     import chromadb
-except ImportError:  # pragma: no cover - optional runtime dependency
-    chromadb = None  # type: ignore[assignment]
+except ImportError:
+    chromadb = None
 
 from app.embed.embeddings import TextEmbedder
 from app.scan.schema import CodeChunk, KBDocument, RetrievalHit

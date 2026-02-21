@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,14 +104,22 @@ def _fallback_query_kb(chunk: CodeChunk, top_k: int, kb_docs: list[tuple[str, st
     return hits
 
 
+def _emit_progress(progress_callback: Callable[[str], None] | None, message: str) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(message)
+
+
 def scan_repo(
     path: str | Path,
     top_k: int | None = None,
     threshold: float | None = None,
     max_chunks: int | None = None,
     repair_retries: int | None = None,
+    llm_timeout_seconds: float | None = None,
     model: str | None = None,
     chunk_size_lines: int | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> ScanReport:
     scan_started_at = datetime.now(timezone.utc)
     repo_path = Path(path).expanduser().resolve()
@@ -124,6 +133,9 @@ def scan_repo(
     configured_max_chunks = max_chunks if max_chunks is not None else settings.scan_max_chunks
     effective_max_chunks = configured_max_chunks if configured_max_chunks > 0 else None
     effective_repair_retries = max(0, repair_retries if repair_retries is not None else settings.scan_repair_retries)
+    effective_llm_timeout_seconds = (
+        llm_timeout_seconds if llm_timeout_seconds is not None else settings.scan_llm_timeout_seconds
+    )
     effective_model = model if model is not None else settings.scan_model
     effective_chunk_size_lines = max(1, chunk_size_lines if chunk_size_lines is not None else settings.chunk_size_lines)
 
@@ -139,6 +151,13 @@ def scan_repo(
 
     stats.files_scanned = len(source_files)
     stats.chunks_considered = len(chunks)
+    _emit_progress(
+        progress_callback,
+        (
+            f"[scan] start repo={repo_path} files={stats.files_scanned} chunks={stats.chunks_considered} "
+            f"top_k={effective_top_k} threshold={effective_threshold} timeout_s={effective_llm_timeout_seconds}"
+        ),
+    )
 
     kb_dir = _resolve_from_project(settings.kb_dir)
     persist_dir = _resolve_from_project(settings.chroma_persist_dir)
@@ -167,12 +186,17 @@ def scan_repo(
             embedder=embedder,
         )
         store.upsert_kb_documents(kb_docs)
-    except Exception as exc:  # pragma: no cover - depends on environment/runtime deps
+    except Exception as exc:
         logger.warning("Falling back to naive KB retrieval because KB index is unavailable: %s", exc)
         store = None
 
     llm_unavailable = False
-    for chunk in chunks:
+    total_chunks = len(chunks)
+    for chunk_index, chunk in enumerate(chunks, start=1):
+        _emit_progress(
+            progress_callback,
+            f"[scan] chunk {chunk_index}/{total_chunks} {chunk.file_path}:{chunk.start_line}-{chunk.end_line}",
+        )
         try:
             if store is not None:
                 kb_hits = store.query_security_kb(query_text=chunk.text, top_k=effective_top_k, min_score=0.0)
@@ -182,6 +206,10 @@ def scan_repo(
             top_score = kb_hits[0].score if kb_hits else 0.0
             if top_score < effective_threshold:
                 stats.skipped_low_similarity += 1
+                _emit_progress(
+                    progress_callback,
+                    f"[scan] chunk {chunk_index}/{total_chunks} skipped_low_similarity score={top_score:.3f}",
+                )
                 continue
 
             if llm_unavailable:
@@ -195,6 +223,10 @@ def scan_repo(
                             reason="llm_unavailable",
                         )
                     )
+                _emit_progress(
+                    progress_callback,
+                    f"[scan] chunk {chunk_index}/{total_chunks} skipped llm_unavailable",
+                )
                 continue
 
             audit_result = audit_chunk_with_llm(
@@ -202,6 +234,7 @@ def scan_repo(
                 kb_hits=kb_hits,
                 model=effective_model,
                 repair_retries=effective_repair_retries,
+                timeout_seconds=effective_llm_timeout_seconds,
             )
             stats.llm_calls += audit_result.llm_calls
             stats.llm_retries += audit_result.llm_retries
@@ -219,6 +252,10 @@ def scan_repo(
                             reason="llm_unavailable",
                         )
                     )
+                _emit_progress(
+                    progress_callback,
+                    f"[scan] chunk {chunk_index}/{total_chunks} skipped llm_unavailable",
+                )
                 continue
 
             if audit_result.skipped_parse_error:
@@ -232,10 +269,21 @@ def scan_repo(
                             reason=f"llm_parse_error: {audit_result.error_reason}",
                         )
                     )
+                _emit_progress(
+                    progress_callback,
+                    (
+                        f"[scan] chunk {chunk_index}/{total_chunks} skipped_parse_error "
+                        f"reason={audit_result.error_reason}"
+                    ),
+                )
                 continue
 
             findings.extend([_normalize_finding(finding, repo_root=repo_path) for finding in audit_result.findings])
-        except Exception as exc:  # pragma: no cover - defensive runtime guard
+            _emit_progress(
+                progress_callback,
+                f"[scan] chunk {chunk_index}/{total_chunks} findings={len(audit_result.findings)}",
+            )
+        except Exception as exc:
             stats.chunks_skipped_exception += 1
             if len(errors) < MAX_REPORTED_ERRORS:
                 errors.append(
@@ -246,6 +294,10 @@ def scan_repo(
                         reason=f"chunk_exception: {exc}",
                     )
                 )
+            _emit_progress(
+                progress_callback,
+                f"[scan] chunk {chunk_index}/{total_chunks} exception={exc}",
+            )
             continue
 
     stats.findings_before_dedup = len(findings)
@@ -263,5 +315,12 @@ def scan_repo(
         max_chunks=effective_max_chunks,
         chunk_size_lines=effective_chunk_size_lines,
         repair_retries=effective_repair_retries,
+    )
+    _emit_progress(
+        progress_callback,
+        (
+            f"[scan] done findings={stats.findings_after_dedup} llm_calls={stats.llm_calls} "
+            f"parse_failures={stats.llm_parse_failures} skipped={stats.skipped_low_similarity + stats.chunks_skipped_parse_error + stats.chunks_skipped_exception}"
+        ),
     )
     return ScanReport(metadata=metadata, stats=stats, findings=deduped_findings, errors=errors)

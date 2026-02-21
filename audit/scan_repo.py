@@ -10,7 +10,7 @@ DEFAULT_SCAN_PATH = REPO_ROOT / "test_repo"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.scan.scan_repo import scan_repo  # noqa: E402
+from app.scan.scan_repo import scan_repo
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -25,14 +25,31 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threshold", type=float, default=None, help="Minimum similarity threshold")
     parser.add_argument("--max-chunks", type=int, default=None, help="Maximum chunks to consider")
     parser.add_argument("--repair-retries", type=int, default=None, help="LLM JSON repair retries")
+    parser.add_argument(
+        "--llm-timeout-seconds",
+        type=float,
+        default=None,
+        help="Per LLM call timeout in seconds",
+    )
     parser.add_argument("--model", type=str, default=None, help="LLM model name")
     parser.add_argument("--chunk-size-lines", type=int, default=None, help="Chunk size in lines")
+    parser.add_argument(
+        "--progress",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show per-chunk scan progress on stderr",
+    )
     return parser
 
 
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
+
+    progress_callback = None
+    if args.progress:
+        progress_callback = lambda message: print(message, file=sys.stderr, flush=True)
+
     try:
         report = scan_repo(
             path=args.path,
@@ -40,8 +57,10 @@ def main() -> int:
             threshold=args.threshold,
             max_chunks=args.max_chunks,
             repair_retries=args.repair_retries,
+            llm_timeout_seconds=args.llm_timeout_seconds,
             model=args.model,
             chunk_size_lines=args.chunk_size_lines,
+            progress_callback=progress_callback,
         )
     except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

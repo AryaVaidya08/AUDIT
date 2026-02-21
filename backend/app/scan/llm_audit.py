@@ -7,8 +7,8 @@ from typing import Any
 
 try:
     from openai import OpenAI
-except ImportError:  # pragma: no cover - optional runtime dependency
-    OpenAI = None  # type: ignore[assignment]
+except ImportError:
+    OpenAI = None
 
 from app.scan.prompts import build_audit_messages, build_repair_messages
 from app.scan.schema import CodeChunk, Finding, RetrievalHit
@@ -164,10 +164,21 @@ def _build_openai_client(api_key: str | None = None) -> Any | None:
     return OpenAI(api_key=resolved_key)
 
 
-def _chat(client: Any, model: str, system_prompt: str, user_prompt: str) -> str:
+def _normalize_timeout(timeout_seconds: float | None) -> float:
+    if timeout_seconds is None:
+        return 20.0
+    try:
+        normalized = float(timeout_seconds)
+    except (TypeError, ValueError):
+        return 20.0
+    return max(1.0, normalized)
+
+
+def _chat(client: Any, model: str, system_prompt: str, user_prompt: str, timeout_seconds: float) -> str:
     response = client.chat.completions.create(
         model=model,
         temperature=0,
+        timeout=timeout_seconds,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -181,6 +192,7 @@ def audit_chunk_with_llm(
     kb_hits: list[RetrievalHit],
     model: str,
     repair_retries: int = 1,
+    timeout_seconds: float | None = None,
     api_key: str | None = None,
     client: Any | None = None,
 ) -> ChunkAuditResult:
@@ -193,6 +205,7 @@ def audit_chunk_with_llm(
     parse_failures = 0
     raw_output = ""
     last_error = "unknown_error"
+    effective_timeout = _normalize_timeout(timeout_seconds)
 
     for attempt in range(max(0, repair_retries) + 1):
         if attempt == 0:
@@ -202,7 +215,13 @@ def audit_chunk_with_llm(
             system_prompt, user_prompt = build_repair_messages(raw_output=raw_output)
 
         try:
-            raw_output = _chat(llm_client, model=model, system_prompt=system_prompt, user_prompt=user_prompt)
+            raw_output = _chat(
+                llm_client,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                timeout_seconds=effective_timeout,
+            )
             llm_calls += 1
             findings = _parse_findings(raw_output=raw_output, chunk=chunk)
             return ChunkAuditResult(

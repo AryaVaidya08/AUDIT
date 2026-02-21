@@ -34,11 +34,13 @@ By default, this scans `test_repo/`. You can also pass an explicit path.
 Optional flags:
 
 ```bash
-python -m audit.scan_repo ./demo_vuln_repo \
+python -m audit.scan_repo ./test_repo \
   --top-k 5 \
   --threshold 0.2 \
   --max-chunks 300 \
   --repair-retries 1 \
+  --llm-timeout-seconds 20 \
+  --no-progress \
   --model gpt-4.1-mini
 ```
 
@@ -55,6 +57,7 @@ The command always returns a valid JSON `ScanReport`:
 - If retry still fails, that chunk is skipped and logged in `errors`.
 - The overall scan continues and returns a valid report object.
 - Findings are normalized and deduplicated by `(file_path, start_line, vuln_type)`.
+- Progress lines are emitted during CLI scans so long-running runs don't appear stuck.
 
 ## Run API (Optional)
 
@@ -123,3 +126,4 @@ See `.env.example` for defaults:
 - `SCAN_SIMILARITY_THRESHOLD`
 - `SCAN_MAX_CHUNKS`
 - `SCAN_REPAIR_RETRIES`
+- `SCAN_LLM_TIMEOUT_SECONDS`

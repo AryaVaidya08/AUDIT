@@ -6,8 +6,8 @@ from collections.abc import Iterable
 
 try:
     from openai import OpenAI
-except ImportError:  # pragma: no cover - optional runtime dependency
-    OpenAI = None  # type: ignore[assignment]
+except ImportError:
+    OpenAI = None
 
 
 def _chunked(values: list[str], size: int) -> Iterable[list[str]]:

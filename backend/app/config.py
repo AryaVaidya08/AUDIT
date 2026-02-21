@@ -111,6 +111,7 @@ class Settings:
     scan_similarity_threshold: float
     scan_max_chunks: int
     scan_repair_retries: int
+    scan_llm_timeout_seconds: float
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -206,6 +207,7 @@ class Settings:
             scan_similarity_threshold=_parse_float(os.getenv("SCAN_SIMILARITY_THRESHOLD"), 0.2),
             scan_max_chunks=_parse_int(os.getenv("SCAN_MAX_CHUNKS"), 300),
             scan_repair_retries=_parse_int(os.getenv("SCAN_REPAIR_RETRIES"), 1),
+            scan_llm_timeout_seconds=_parse_float(os.getenv("SCAN_LLM_TIMEOUT_SECONDS"), 20.0),
         )
 
 
