@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ShopApp</title>
+</head>
+<body>
+    <h1>Welcome to ShopApp</h1>
+
+    <div id="search-section">
+        <input type="text" id="search-input" placeholder="Search products...">
+        <button onclick="searchProducts()">Search</button>
+        <div id="search-results"></div>
+    </div>
+
+    <div id="profile-section">
+        <input type="text" id="user-id" placeholder="User ID">
+        <button onclick="loadProfile()">Load Profile</button>
+        <div id="profile-data"></div>
+    </div>
+
+    <div id="comment-section">
+        <textarea id="comment-text" placeholder="Leave a comment..."></textarea>
+        <button onclick="postComment()">Post Comment</button>
+        <div id="comments-display"></div>
+    </div>
+
+    <div id="message-section">
+        <div id="notification"></div>
+    </div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const msg = params.get('message');
+        if (msg) {
+            document.getElementById('notification').innerHTML = msg;
+        }
+
+        function searchProducts() {
+            const term = document.getElementById('search-input').value;
+            fetch('/search?q=' + term)
+                .then(r => r.text())
+                .then(html => {
+                    document.getElementById('search-results').innerHTML = html;
+                });
+        }
+
+        function loadProfile() {
+            const uid = document.getElementById('user-id').value;
+            fetch('/user/profile?id=' + uid)
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('profile-data').innerHTML =
+                        '<p>Username: ' + data.username + '</p>' +
+                        '<p>Email: ' + data.email + '</p>' +
+                        '<p>Role: ' + data.role + '</p>';
+                });
+        }
+
+        function postComment() {
+            const text = document.getElementById('comment-text').value;
+            const postId = new URLSearchParams(window.location.search).get('post_id') || 1;
+            fetch('/comment', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ postId, text })
+            }).then(r => r.text()).then(resp => {
+                document.getElementById('comments-display').innerHTML += '<div>' + text + '</div>';
+            });
+        }
+
+        function loadComments(postId) {
+            fetch('/api/comments?post_id=' + postId)
+                .then(r => r.json())
+                .then(comments => {
+                    const container = document.getElementById('comments-display');
+                    comments.forEach(c => {
+                        const div = document.createElement('div');
+                        div.innerHTML = c.body;
+                        container.appendChild(div);
+                    });
+                });
+        }
+
+        function handleRedirect() {
+            const next = params.get('next');
+            if (next) {
+                window.location.href = next;
+            }
+        }
+
+        function updateUserSettings(settings) {
+            document.cookie = 'userPrefs=' + JSON.stringify(settings);
+        }
+
+        function loadUserPrefs() {
+            const allCookies = document.cookie;
+            const prefsCookie = allCookies.split(';').find(c => c.trim().startsWith('userPrefs='));
+            if (prefsCookie) {
+                const prefs = JSON.parse(prefsCookie.split('=')[1]);
+                document.getElementById('notification').innerHTML = 'Welcome back, ' + prefs.username + '!';
+            }
+        }
+
+        function submitFeedback() {
+            const feedback = document.getElementById('feedback').value;
+            const url = '/api/feedback';
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', url, true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.send(JSON.stringify({ feedback: feedback }));
+        }
+
+        window.onload = function() {
+            handleRedirect();
+            loadUserPrefs();
+        };
+    </script>
+</body>
+</html>
