@@ -5,6 +5,8 @@ from textwrap import dedent
 
 from app.scan.schema import CodeChunk, RetrievalHit
 
+PROMPT_VERSION = "v1"
+
 _REQUIRED_FIELDS = (
     "vuln_type",
     "severity",

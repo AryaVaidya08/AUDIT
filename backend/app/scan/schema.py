@@ -59,6 +59,10 @@ class Finding(StrictModel):
 class ScanStats(StrictModel):
     files_scanned: int = Field(default=0, ge=0)
     chunks_considered: int = Field(default=0, ge=0)
+    chunks_prefiltered: int = Field(default=0, ge=0)
+    chunks_sent_to_llm: int = Field(default=0, ge=0)
+    cache_hits: int = Field(default=0, ge=0)
+    cache_misses: int = Field(default=0, ge=0)
     llm_calls: int = Field(default=0, ge=0)
     llm_retries: int = Field(default=0, ge=0)
     skipped_low_similarity: int = Field(default=0, ge=0)
@@ -67,6 +71,8 @@ class ScanStats(StrictModel):
     chunks_skipped_exception: int = Field(default=0, ge=0)
     findings_before_dedup: int = Field(default=0, ge=0)
     findings_after_dedup: int = Field(default=0, ge=0)
+    duration_ms: int = Field(default=0, ge=0)
+    resume_used: bool = False
 
 
 class ScanMetadata(StrictModel):

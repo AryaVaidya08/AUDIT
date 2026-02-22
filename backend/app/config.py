@@ -111,6 +111,14 @@ class Settings:
     scan_similarity_threshold: float
     scan_max_chunks: int
     scan_repair_retries: int
+    scan_prefilter_enabled: bool
+    scan_prefilter_min_score: float
+    scan_prefilter_max_candidates: int
+    scan_cache_enabled: bool
+    scan_cache_path: str
+    scan_max_inflight_llm_calls: int
+    scan_checkpoint_path: str
+    scan_checkpoint_every: int
     scan_llm_timeout_seconds: float
 
     @classmethod
@@ -207,6 +215,14 @@ class Settings:
             scan_similarity_threshold=_parse_float(os.getenv("SCAN_SIMILARITY_THRESHOLD"), 0.2),
             scan_max_chunks=_parse_int(os.getenv("SCAN_MAX_CHUNKS"), 300),
             scan_repair_retries=_parse_int(os.getenv("SCAN_REPAIR_RETRIES"), 1),
+            scan_prefilter_enabled=_parse_bool(os.getenv("SCAN_PREFILTER_ENABLED"), True),
+            scan_prefilter_min_score=_parse_float(os.getenv("SCAN_PREFILTER_MIN_SCORE"), 0.2),
+            scan_prefilter_max_candidates=_parse_int(os.getenv("SCAN_PREFILTER_MAX_CANDIDATES"), 200),
+            scan_cache_enabled=_parse_bool(os.getenv("SCAN_CACHE_ENABLED"), True),
+            scan_cache_path=os.getenv("SCAN_CACHE_PATH", "scan_cache.sqlite3"),
+            scan_max_inflight_llm_calls=_parse_int(os.getenv("SCAN_MAX_INFLIGHT_LLM_CALLS"), 4),
+            scan_checkpoint_path=os.getenv("SCAN_CHECKPOINT_PATH", "scan_resume.json"),
+            scan_checkpoint_every=_parse_int(os.getenv("SCAN_CHECKPOINT_EVERY"), 5),
             scan_llm_timeout_seconds=_parse_float(os.getenv("SCAN_LLM_TIMEOUT_SECONDS"), 20.0),
         )
 

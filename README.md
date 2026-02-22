@@ -1,4 +1,4 @@
-# AUDIT - Day 3 Scan Engine
+# AUDIT - Day 4 Scan Engine
 
 ## Project Structure
 
@@ -21,17 +21,19 @@ source .venv/bin/activate
 pip install fastapi uvicorn chromadb openai pytest
 ```
 
-## Run Local Scan (No Server)
+## Local Scan (Server Optional)
 
-From the repository root, run:
+For local scanning, server startup is not required.
+
+From repository root:
 
 ```bash
 python -m audit.scan_repo
 ```
 
-By default, this scans `test_repo/`. You can also pass an explicit path.
+Default target path is `test_repo/`.
 
-Optional flags:
+## CLI Options
 
 ```bash
 python -m audit.scan_repo ./test_repo \
@@ -40,26 +42,71 @@ python -m audit.scan_repo ./test_repo \
   --max-chunks 300 \
   --repair-retries 1 \
   --llm-timeout-seconds 20 \
-  --no-progress \
+  --prefilter-min-score 0.2 \
+  --prefilter-max-candidates 200 \
+  --max-inflight-llm-calls 4 \
+  --cache \
+  --cache-path scan_cache.sqlite3 \
+  --resume \
+  --checkpoint-path scan_resume.json \
+  --progress \
   --model gpt-4.1-mini
 ```
 
-The command always returns a valid JSON `ScanReport`:
-- `metadata` (model/config/runtime)
-- `stats` (`files_scanned`, `chunks_considered`, `llm_calls`, `skipped_low_similarity`, parse/skip counters)
-- `findings[]`
-- `errors[]` (chunk-level graceful failures)
+Supported scan flags include:
+- `--resume/--no-resume`
+- `--prefilter-min-score`
+- `--prefilter-max-candidates`
+- `--max-inflight-llm-calls`
+- `--cache/--no-cache`
+- `--cache-path`
+- `--checkpoint-path`
+- `--llm-timeout-seconds`
+- `--progress/--no-progress`
+
+## Scan Pipeline (Single Entrypoint)
+
+Both CLI and API use the same orchestration function: `scan_repo(...)`.
+
+Pipeline order:
+1. collect files/chunks
+2. compute KB scores + prefilter scores
+3. select candidate chunks
+4. cache lookup
+5. concurrent LLM audit for cache misses
+6. merge cached + fresh findings
+7. normalize/dedup findings
+8. finalize metadata/stats
 
 ## Reliability Guarantees
 
-- LLM output is JSON-enforced.
-- If output is non-JSON, one repair retry is attempted.
-- If retry still fails, that chunk is skipped and logged in `errors`.
-- The overall scan continues and returns a valid report object.
-- Findings are normalized and deduplicated by `(file_path, start_line, vuln_type)`.
-- Progress lines are emitted during CLI scans so long-running runs don't appear stuck.
+- Output is always a strict `ScanReport` JSON object.
+- Chunk-level LLM failures (timeout/parse/network) do not crash the run.
+- Findings ordering/dedup is deterministic.
+- Per-call LLM timeout is enforced (`SCAN_LLM_TIMEOUT_SECONDS`, `--llm-timeout-seconds`).
 
-## Run API (Optional)
+## Performance Controls
+
+- Prefilter reduces LLM volume using combined risk score (KB similarity + suspicious pattern hits + extension weight).
+- Incremental SQLite cache stores validated `Finding[]` per chunk/model/prompt version.
+- Concurrent LLM calls are bounded by `SCAN_MAX_INFLIGHT_LLM_CALLS`.
+
+`stats` now includes:
+- `chunks_prefiltered`
+- `chunks_sent_to_llm`
+- `cache_hits`
+- `cache_misses`
+- `duration_ms`
+- `resume_used`
+
+## Resume Behavior
+
+- Checkpoint file defaults to `scan_resume.json`.
+- Resume is enabled with `--resume`.
+- Resume applies only when checkpoint run signature matches current scan setup.
+- Checkpoints are written periodically (`SCAN_CHECKPOINT_EVERY`) and used to continue long runs.
+
+## API (Optional)
 
 From repository root:
 
@@ -74,13 +121,7 @@ Health check:
 curl http://127.0.0.1:8000/
 ```
 
-Expected response:
-
-```json
-{"status":"ok"}
-```
-
-## API Scan Endpoint
+Scan endpoint:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/scan \
@@ -88,42 +129,31 @@ curl -X POST http://127.0.0.1:8000/scan \
   -d '{"local_path":"/absolute/path/to/repo"}'
 ```
 
-The endpoint now calls the same `scan_repo(...)` core flow used by `python -m audit.scan_repo`.
+`/scan` uses the same `scan_repo(...)` path as local CLI scans.
 
-## Index for Retrieval (Day 2)
+## Index Endpoint (Optional)
 
 `POST /index` indexes:
 - KB markdown docs (`backend/app/scan/kb/*.md`) into `security_kb`
 - repo code chunks into `code_chunks`
 
-It writes a persistent Chroma DB in `.chroma/` by default.
+It persists Chroma data in `.chroma/` by default.
 
-```bash
-curl -X POST http://127.0.0.1:8000/index \
-  -H "Content-Type: application/json" \
-  -d '{"local_path":"/absolute/path/to/repo","top_k":5}'
-```
+## Environment Variables
 
-Response includes:
-- `kb_docs_indexed`
-- `code_chunks_indexed`
-- `retrieval_samples` (top KB hits + scores for a suspicious code chunk)
-- `persist_dir`
-
-## Notes
-
-- Files are chunked into 120-line blocks by default.
-- Include/exclude behavior and limits are configurable via environment variables in `.env.example`.
-- The app auto-loads repo-root `.env` and `.env.local` values on startup.
-- If `OPENAI_API_KEY` is missing, embeddings fall back to deterministic local vectors and LLM audit calls are skipped gracefully.
-
-## Scan Environment Variables
-
-See `.env.example` for defaults:
+See `.env.example` for full defaults. Key scan controls:
 
 - `SCAN_MODEL`
 - `SCAN_TOP_K`
 - `SCAN_SIMILARITY_THRESHOLD`
 - `SCAN_MAX_CHUNKS`
 - `SCAN_REPAIR_RETRIES`
+- `SCAN_PREFILTER_ENABLED`
+- `SCAN_PREFILTER_MIN_SCORE`
+- `SCAN_PREFILTER_MAX_CANDIDATES`
+- `SCAN_CACHE_ENABLED`
+- `SCAN_CACHE_PATH`
+- `SCAN_MAX_INFLIGHT_LLM_CALLS`
+- `SCAN_CHECKPOINT_PATH`
+- `SCAN_CHECKPOINT_EVERY`
 - `SCAN_LLM_TIMEOUT_SECONDS`

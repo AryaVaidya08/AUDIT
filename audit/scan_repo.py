@@ -31,6 +31,38 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Per LLM call timeout in seconds",
     )
+    parser.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Resume from a matching checkpoint when available",
+    )
+    parser.add_argument(
+        "--prefilter-min-score",
+        type=float,
+        default=None,
+        help="Minimum prefilter score to keep a candidate chunk",
+    )
+    parser.add_argument(
+        "--prefilter-max-candidates",
+        type=int,
+        default=None,
+        help="Maximum prefiltered candidates to send to cache/LLM stage",
+    )
+    parser.add_argument(
+        "--max-inflight-llm-calls",
+        type=int,
+        default=None,
+        help="Maximum concurrent in-flight LLM calls for cache misses",
+    )
+    parser.add_argument(
+        "--cache",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable or disable incremental SQLite cache",
+    )
+    parser.add_argument("--cache-path", type=str, default=None, help="Path to SQLite cache file")
+    parser.add_argument("--checkpoint-path", type=str, default=None, help="Path to resume checkpoint JSON")
     parser.add_argument("--model", type=str, default=None, help="LLM model name")
     parser.add_argument("--chunk-size-lines", type=int, default=None, help="Chunk size in lines")
     parser.add_argument(
@@ -58,6 +90,13 @@ def main() -> int:
             max_chunks=args.max_chunks,
             repair_retries=args.repair_retries,
             llm_timeout_seconds=args.llm_timeout_seconds,
+            resume=args.resume,
+            prefilter_min_score=args.prefilter_min_score,
+            prefilter_max_candidates=args.prefilter_max_candidates,
+            max_inflight_llm_calls=args.max_inflight_llm_calls,
+            cache_enabled=args.cache,
+            cache_path=args.cache_path,
+            checkpoint_path=args.checkpoint_path,
             model=args.model,
             chunk_size_lines=args.chunk_size_lines,
             progress_callback=progress_callback,
