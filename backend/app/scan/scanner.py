@@ -64,7 +64,52 @@ RULES: tuple[HeuristicRule, ...] = (
             """
         ),
     ),
+    HeuristicRule(
+        rule_id="CODE_EXEC.DYNAMIC_EVAL",
+        title="Dynamic code execution with eval/exec",
+        severity="high",
+        description="Direct eval/exec usage can execute attacker-controlled input.",
+        pattern=re.compile(r"(?i)\b(eval|exec)\s*\("),
+    ),
+    HeuristicRule(
+        rule_id="DESERIALIZE.UNSAFE_LOAD",
+        title="Unsafe deserialization call",
+        severity="high",
+        description="Unsafe deserialization can enable arbitrary code execution.",
+        pattern=re.compile(
+            r"""(?ix)
+            (
+                \bpickle\.loads\s*\(
+                |
+                \byaml\.load\s*\(
+                |
+                \bmarshal\.loads\s*\(
+                |
+                \bdill\.loads\s*\(
+                |
+                \bunserialize\s*\(
+            )
+            """
+        ),
+    ),
 )
+
+_ADMIN_ROUTE_PATTERN = re.compile(
+    r"""(?ix)
+    \b(app|router|bp)\.(get|post|put|patch|delete|route)\s*\(
+    \s*["']/(
+        admin
+        |internal
+        |privileged
+        |manage
+        |root
+    )[^"']*["']
+    """
+)
+_AUTH_GUARD_PATTERN = re.compile(
+    r"(?i)\b(auth|authorize|authorization|jwt|verify|require_?auth|is_admin|admin_required|login_required)\b"
+)
+_ADMIN_ROUTE_WINDOW_LINES = 10
 
 
 def _build_finding(rule: HeuristicRule, chunk: CodeChunk, line_number: int, line: str) -> Finding:
@@ -80,6 +125,40 @@ def _build_finding(rule: HeuristicRule, chunk: CodeChunk, line_number: int, line
         evidence=line.strip()[:300],
         recommendation=rule.description,
     )
+
+
+def _build_missing_auth_finding(chunk: CodeChunk, line_number: int, line: str) -> Finding:
+    return Finding(
+        vuln_type="AUTH.MISSING_ADMIN_GUARD",
+        severity="high",
+        confidence=0.55,
+        references=[],
+        file_path=chunk.file_path,
+        start_line=line_number,
+        end_line=line_number,
+        message="Privileged route may be missing an auth check",
+        evidence=line.strip()[:300],
+        recommendation="Add authentication/authorization middleware or an explicit guard for privileged routes.",
+    )
+
+
+def _scan_missing_auth(chunk: CodeChunk, lines: list[str], seen: set[tuple[str, str, int]]) -> list[Finding]:
+    findings: list[Finding] = []
+    for offset, line in enumerate(lines):
+        if not _ADMIN_ROUTE_PATTERN.search(line):
+            continue
+
+        line_number = chunk.start_line + offset
+        window_text = "\n".join(lines[offset : offset + _ADMIN_ROUTE_WINDOW_LINES])
+        if _AUTH_GUARD_PATTERN.search(window_text):
+            continue
+
+        dedup_key = ("AUTH.MISSING_ADMIN_GUARD", chunk.file_path, line_number)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        findings.append(_build_missing_auth_finding(chunk=chunk, line_number=line_number, line=line))
+    return findings
 
 
 def scan_chunks(chunks: list[CodeChunk]) -> ScanReport:
@@ -99,6 +178,7 @@ def scan_chunks(chunks: list[CodeChunk]) -> ScanReport:
                     continue
                 seen.add(dedup_key)
                 findings.append(_build_finding(rule=rule, chunk=chunk, line_number=absolute_line, line=line))
+        findings.extend(_scan_missing_auth(chunk=chunk, lines=lines, seen=seen))
 
     file_count = len({chunk.file_path for chunk in chunks})
     finished = datetime.now(timezone.utc)

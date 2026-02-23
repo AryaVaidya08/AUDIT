@@ -1,8 +1,23 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+_APP_CACHE_DIR_NAME = "audit"
+
+
+def _default_user_cache_dir(app_name: str = _APP_CACHE_DIR_NAME) -> Path:
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Caches"
+    elif os.name == "nt":
+        local_app_data = os.getenv("LOCALAPPDATA")
+        base = Path(local_app_data).expanduser() if local_app_data else Path.home() / "AppData" / "Local"
+    else:
+        xdg_cache_home = os.getenv("XDG_CACHE_HOME")
+        base = Path(xdg_cache_home).expanduser() if xdg_cache_home else Path.home() / ".cache"
+    return (base / app_name).expanduser().resolve()
 
 
 def _parse_env_line(raw_line: str) -> tuple[str, str] | None:
@@ -123,6 +138,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        default_cache_dir = _default_user_cache_dir()
         return cls(
             chunk_size_lines=_parse_int(os.getenv("CHUNK_SIZE_LINES"), 120),
             max_files=_parse_int(os.getenv("MAX_FILES"), 5000),
@@ -182,6 +198,7 @@ class Settings:
                     ".pytest_cache",
                     ".cache",
                     ".chroma",
+                    ".audit",
                 ),
             ),
             exclude_globs=_parse_csv(
@@ -200,10 +217,14 @@ class Settings:
                     "*.gz",
                     "*.exe",
                     "*.bin",
+                    "report.json",
+                    "*.report.json",
+                    "scan_cache.sqlite3",
+                    "scan_resume.json",
                 ),
             ),
             kb_dir=os.getenv("KB_DIR", "backend/app/scan/kb"),
-            chroma_persist_dir=os.getenv("CHROMA_PERSIST_DIR", ".chroma"),
+            chroma_persist_dir=os.getenv("CHROMA_PERSIST_DIR", str(default_cache_dir / "chroma")),
             chroma_collection_code_chunks=os.getenv("CHROMA_COLLECTION_CODE_CHUNKS", "code_chunks"),
             chroma_collection_security_kb=os.getenv("CHROMA_COLLECTION_SECURITY_KB", "security_kb"),
             embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
@@ -219,9 +240,9 @@ class Settings:
             scan_prefilter_min_score=_parse_float(os.getenv("SCAN_PREFILTER_MIN_SCORE"), 0.2),
             scan_prefilter_max_candidates=_parse_int(os.getenv("SCAN_PREFILTER_MAX_CANDIDATES"), 200),
             scan_cache_enabled=_parse_bool(os.getenv("SCAN_CACHE_ENABLED"), True),
-            scan_cache_path=os.getenv("SCAN_CACHE_PATH", "scan_cache.sqlite3"),
+            scan_cache_path=os.getenv("SCAN_CACHE_PATH", str(default_cache_dir / "scan_cache.sqlite3")),
             scan_max_inflight_llm_calls=_parse_int(os.getenv("SCAN_MAX_INFLIGHT_LLM_CALLS"), 4),
-            scan_checkpoint_path=os.getenv("SCAN_CHECKPOINT_PATH", "scan_resume.json"),
+            scan_checkpoint_path=os.getenv("SCAN_CHECKPOINT_PATH", str(default_cache_dir / "scan_resume.json")),
             scan_checkpoint_every=_parse_int(os.getenv("SCAN_CHECKPOINT_EVERY"), 5),
             scan_llm_timeout_seconds=_parse_float(os.getenv("SCAN_LLM_TIMEOUT_SECONDS"), 20.0),
         )

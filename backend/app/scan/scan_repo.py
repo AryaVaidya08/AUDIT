@@ -13,7 +13,7 @@ from app.ingest.repo_loader import collect_files
 from app.parse.chunkers import chunk_sources
 from app.scan.cache import CacheRecord, ScanCache, build_cache_key, compute_chunk_hash
 from app.scan.kb_loader import load_kb_documents
-from app.scan.llm_audit import ChunkAuditResult, audit_chunk_with_llm
+from app.scan.llm_audit import ChunkAuditResult, audit_chunk_with_llm, llm_is_available
 from app.scan.prefilter import select_candidates
 from app.scan.prompts import PROMPT_VERSION
 from app.scan.resume import (
@@ -24,6 +24,7 @@ from app.scan.resume import (
     load_checkpoint,
     save_checkpoint,
 )
+from app.scan.scanner import scan_chunks as scan_chunks_with_heuristics
 from app.scan.schema import (
     CodeChunk,
     Finding,
@@ -49,6 +50,13 @@ def _resolve_from_project(raw_path: str | Path) -> Path:
     return candidate.resolve()
 
 
+def _resolve_runtime_path(raw_path: str | Path) -> Path:
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    return candidate.resolve()
+
+
 def _normalize_repo_path(raw_path: str, repo_root: Path) -> str:
     root_text = repo_root.as_posix().rstrip("/")
     value = raw_path.replace("\\", "/").strip()
@@ -57,8 +65,9 @@ def _normalize_repo_path(raw_path: str, repo_root: Path) -> str:
     return value.lstrip("./") or raw_path
 
 
-def _normalize_severity(raw_value: str) -> str:
-    normalized = str(raw_value).strip().lower()
+def _normalize_severity(raw_value: Any) -> str:
+    value = raw_value.value if hasattr(raw_value, "value") else raw_value
+    normalized = str(value).strip().lower()
     if normalized in _SEVERITY_VALUES:
         return normalized
     return "medium"
@@ -69,7 +78,7 @@ def _clamp_confidence(raw_value: float) -> float:
 
 
 def _normalize_finding(finding: Finding, repo_root: Path) -> Finding:
-    payload = finding.model_dump()
+    payload = finding.model_dump(mode="json")
     payload["file_path"] = _normalize_repo_path(payload["file_path"], repo_root)
     payload["severity"] = _normalize_severity(payload["severity"])
     payload["confidence"] = _clamp_confidence(payload["confidence"])
@@ -177,6 +186,36 @@ def _snapshot_partial_findings(candidate_findings: dict[int, list[Finding]], upt
     return payload
 
 
+def _finalize_report(
+    *,
+    repo_path: Path,
+    scan_started_at: datetime,
+    stats: ScanStats,
+    findings: list[Finding],
+    errors: list[ScanChunkError],
+    model_name: str,
+    top_k: int,
+    threshold: float,
+    max_chunks: int | None,
+    chunk_size_lines: int,
+    repair_retries: int,
+) -> ScanReport:
+    scan_finished_at = datetime.now(timezone.utc)
+    stats.duration_ms = int((scan_finished_at - scan_started_at).total_seconds() * 1000)
+    metadata = ScanMetadata(
+        repo_path=str(repo_path),
+        scan_started_at=scan_started_at,
+        scan_finished_at=scan_finished_at,
+        model=model_name,
+        top_k=top_k,
+        similarity_threshold=threshold,
+        max_chunks=max_chunks,
+        chunk_size_lines=chunk_size_lines,
+        repair_retries=repair_retries,
+    )
+    return ScanReport(metadata=metadata, stats=stats, findings=findings, errors=errors)
+
+
 def scan_repo(
     path: str | Path,
     top_k: int | None = None,
@@ -194,6 +233,7 @@ def scan_repo(
     cache_path: str | Path | None = None,
     checkpoint_path: str | Path | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    heuristic_fallback: bool = False,
 ) -> ScanReport:
     scan_started_at = datetime.now(timezone.utc)
     repo_path = Path(path).expanduser().resolve()
@@ -225,7 +265,7 @@ def scan_repo(
         else settings.scan_prefilter_max_candidates,
     )
     effective_cache_enabled = settings.scan_cache_enabled if cache_enabled is None else bool(cache_enabled)
-    effective_cache_path = _resolve_from_project(cache_path if cache_path is not None else settings.scan_cache_path)
+    effective_cache_path = _resolve_runtime_path(cache_path if cache_path is not None else settings.scan_cache_path)
     effective_max_inflight_llm_calls = max(
         1,
         max_inflight_llm_calls
@@ -233,7 +273,7 @@ def scan_repo(
         else settings.scan_max_inflight_llm_calls,
     )
     effective_resume = bool(resume) if resume is not None else False
-    effective_checkpoint_path = _resolve_from_project(
+    effective_checkpoint_path = _resolve_runtime_path(
         checkpoint_path if checkpoint_path is not None else settings.scan_checkpoint_path
     )
     effective_checkpoint_every = max(1, settings.scan_checkpoint_every)
@@ -258,8 +298,42 @@ def scan_repo(
         ),
     )
 
+    if heuristic_fallback and not llm_is_available():
+        _emit_progress(progress_callback, "[scan] llm unavailable; using deterministic heuristic fallback")
+        fallback_report = scan_chunks_with_heuristics(chunks)
+        normalized_findings = [
+            _normalize_finding(finding=finding, repo_root=repo_path) for finding in fallback_report.findings
+        ]
+        deduped_findings = _dedupe_findings(normalized_findings)
+        stats.chunks_prefiltered = len(chunks)
+        stats.chunks_sent_to_llm = 0
+        stats.findings_before_dedup = len(normalized_findings)
+        stats.findings_after_dedup = len(deduped_findings)
+        report = _finalize_report(
+            repo_path=repo_path,
+            scan_started_at=scan_started_at,
+            stats=stats,
+            findings=deduped_findings,
+            errors=[],
+            model_name="heuristic-ruleset",
+            top_k=effective_top_k,
+            threshold=effective_threshold,
+            max_chunks=effective_max_chunks,
+            chunk_size_lines=effective_chunk_size_lines,
+            repair_retries=effective_repair_retries,
+        )
+        _emit_progress(
+            progress_callback,
+            (
+                f"[scan] done findings={report.stats.findings_after_dedup} llm_calls={report.stats.llm_calls} "
+                f"parse_failures={report.stats.llm_parse_failures} cache_hits={report.stats.cache_hits} "
+                f"cache_misses={report.stats.cache_misses} duration_ms={report.stats.duration_ms}"
+            ),
+        )
+        return report
+
     kb_dir = _resolve_from_project(settings.kb_dir)
-    persist_dir = _resolve_from_project(settings.chroma_persist_dir)
+    persist_dir = _resolve_runtime_path(settings.chroma_persist_dir)
     persist_dir.mkdir(parents=True, exist_ok=True)
 
     kb_docs_payload: list[tuple[str, str, list[str], str]] = []
@@ -402,7 +476,13 @@ def scan_repo(
         except Exception as exc:
             cache = None
             effective_cache_enabled = False
-            _emit_progress(progress_callback, f"[scan] cache disabled due to schema error: {exc}")
+            _emit_progress(
+                progress_callback,
+                (
+                    f"[scan] cache disabled path={effective_cache_path} error={exc} "
+                    f"(set SCAN_CACHE_PATH or --cache-path to a writable location)"
+                ),
+            )
 
     candidate_lookup: dict[int, tuple[str, str]] = {}
     for position, chunk_index in enumerate(candidate_indices):
@@ -635,6 +715,13 @@ def scan_repo(
     ordered_findings: list[Finding] = []
     for position in range(total_candidates):
         ordered_findings.extend(candidate_findings.get(position, []))
+
+    if heuristic_fallback and not ordered_findings:
+        _emit_progress(progress_callback, "[scan] no findings from primary path; applying heuristic fallback findings")
+        fallback_report = scan_chunks_with_heuristics(chunks)
+        ordered_findings.extend(
+            _normalize_finding(finding=finding, repo_root=repo_path) for finding in fallback_report.findings
+        )
 
     stats.findings_before_dedup = len(ordered_findings)
     deduped_findings = _dedupe_findings(ordered_findings)

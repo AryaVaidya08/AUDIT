@@ -1,159 +1,81 @@
-# AUDIT - Day 4 Scan Engine
+# AUDIT
 
-## Project Structure
+Local-first repository security scanner with deterministic fallback findings when no LLM API key is configured.
 
-```text
-backend/
-  app/
-    ingest/
-    parse/
-    scan/
-    utils/
-audit/
-cli/
-```
+## Quickstart
 
-## Setup
+Use these exact commands from a fresh clone:
 
 ```bash
+cd /Users/admin/Downloads/AUDIT
 python -m venv .venv
 source .venv/bin/activate
-pip install fastapi uvicorn chromadb openai pytest
+python -m pip install -e .
+cd demo_vuln_repo
+audit . --out report.json
 ```
 
-## Local Scan (Server Optional)
+Important: keep the virtual environment activated so `audit` resolves to the local editable install.
 
-For local scanning, server startup is not required.
+## What you should see
 
-From repository root:
+`audit` writes a full JSON report file and prints a readable summary.
+
+Example output:
+
+```text
+Severity counts: critical=0, high=5, medium=0, low=0
+Top findings (up to 5):
+1. [high] routes.js:4 AUTH.MISSING_ADMIN_GUARD - Privileged route may be missing an auth check
+2. [high] vuln_app.py:4 SECRET.HARDCODED_ASSIGNMENT - Hardcoded secret assignment
+3. [high] vuln_app.py:8 SQLI.DYNAMIC_QUERY - Potential SQL injection via dynamic query
+4. [high] vuln_app.py:14 CODE_EXEC.DYNAMIC_EVAL - Dynamic code execution with eval/exec
+5. [high] vuln_app.py:18 DESERIALIZE.UNSAFE_LOAD - Unsafe deserialization call
+Full report: /absolute/path/to/demo_vuln_repo/report.json
+```
+
+## CLI
+
+Default behavior:
 
 ```bash
-python -m audit.scan_repo
+audit . --out report.json
 ```
 
-Default target path is `test_repo/`.
-
-## CLI Options
+Explicit subcommand (same scan logic):
 
 ```bash
-python -m audit.scan_repo ./test_repo \
-  --top-k 5 \
-  --threshold 0.2 \
-  --max-chunks 300 \
-  --repair-retries 1 \
-  --llm-timeout-seconds 20 \
-  --prefilter-min-score 0.2 \
-  --prefilter-max-candidates 200 \
-  --max-inflight-llm-calls 4 \
-  --cache \
-  --cache-path scan_cache.sqlite3 \
-  --resume \
-  --checkpoint-path scan_resume.json \
-  --progress \
-  --model gpt-4.1-mini
+audit scan . --out report.json
 ```
 
-Supported scan flags include:
-- `--resume/--no-resume`
-- `--prefilter-min-score`
-- `--prefilter-max-candidates`
-- `--max-inflight-llm-calls`
-- `--cache/--no-cache`
-- `--cache-path`
-- `--checkpoint-path`
-- `--llm-timeout-seconds`
-- `--progress/--no-progress`
+Common flags:
 
-## Scan Pipeline (Single Entrypoint)
+- `--out PATH`: write full JSON report (default: `report.json` in the current directory)
+- `--fail-on {low|medium|high|critical}`: exit `1` when any finding meets/exceeds the threshold
+- `--progress/--no-progress`: show per-chunk progress on stderr
+- advanced scan tuning flags are also available (`--top-k`, `--threshold`, `--max-chunks`, cache/resume flags, etc.)
 
-Both CLI and API use the same orchestration function: `scan_repo(...)`.
+Exit codes:
 
-Pipeline order:
-1. collect files/chunks
-2. compute KB scores + prefilter scores
-3. select candidate chunks
-4. cache lookup
-5. concurrent LLM audit for cache misses
-6. merge cached + fresh findings
-7. normalize/dedup findings
-8. finalize metadata/stats
+- `0`: scan completed (even if findings exist)
+- `1`: scan completed and `--fail-on` threshold was met
+- `2`: argument/config/runtime error
 
-## Reliability Guarantees
+## Caching (plain terms)
 
-- Output is always a strict `ScanReport` JSON object.
-- Chunk-level LLM failures (timeout/parse/network) do not crash the run.
-- Findings ordering/dedup is deterministic.
-- Per-call LLM timeout is enforced (`SCAN_LLM_TIMEOUT_SECONDS`, `--llm-timeout-seconds`).
+- AUDIT can cache chunk-level results so repeated scans of unchanged code run faster.
+- Cache hits reuse prior findings; cache misses are rescanned.
+- You can disable cache with `--no-cache` or switch cache location with `--cache-scope` / `--cache-path`.
 
-## Performance Controls
+## Safety
 
-- Prefilter reduces LLM volume using combined risk score (KB similarity + suspicious pattern hits + extension weight).
-- Incremental SQLite cache stores validated `Finding[]` per chunk/model/prompt version.
-- Concurrent LLM calls are bounded by `SCAN_MAX_INFLIGHT_LLM_CALLS`.
+AUDIT does not modify code in the scanned repository. It only reads files and writes report/cache artifacts.
 
-`stats` now includes:
-- `chunks_prefiltered`
-- `chunks_sent_to_llm`
-- `cache_hits`
-- `cache_misses`
-- `duration_ms`
-- `resume_used`
-
-## Resume Behavior
-
-- Checkpoint file defaults to `scan_resume.json`.
-- Resume is enabled with `--resume`.
-- Resume applies only when checkpoint run signature matches current scan setup.
-- Checkpoints are written periodically (`SCAN_CHECKPOINT_EVERY`) and used to continue long runs.
-
-## API (Optional)
-
-From repository root:
+## CI example
 
 ```bash
-cd backend
-uvicorn app.main:app --reload
+python -m pip install -e .
+audit . --out report.json --fail-on high
 ```
 
-Health check:
-
-```bash
-curl http://127.0.0.1:8000/
-```
-
-Scan endpoint:
-
-```bash
-curl -X POST http://127.0.0.1:8000/scan \
-  -H "Content-Type: application/json" \
-  -d '{"local_path":"/absolute/path/to/repo"}'
-```
-
-`/scan` uses the same `scan_repo(...)` path as local CLI scans.
-
-## Index Endpoint (Optional)
-
-`POST /index` indexes:
-- KB markdown docs (`backend/app/scan/kb/*.md`) into `security_kb`
-- repo code chunks into `code_chunks`
-
-It persists Chroma data in `.chroma/` by default.
-
-## Environment Variables
-
-See `.env.example` for full defaults. Key scan controls:
-
-- `SCAN_MODEL`
-- `SCAN_TOP_K`
-- `SCAN_SIMILARITY_THRESHOLD`
-- `SCAN_MAX_CHUNKS`
-- `SCAN_REPAIR_RETRIES`
-- `SCAN_PREFILTER_ENABLED`
-- `SCAN_PREFILTER_MIN_SCORE`
-- `SCAN_PREFILTER_MAX_CANDIDATES`
-- `SCAN_CACHE_ENABLED`
-- `SCAN_CACHE_PATH`
-- `SCAN_MAX_INFLIGHT_LLM_CALLS`
-- `SCAN_CHECKPOINT_PATH`
-- `SCAN_CHECKPOINT_EVERY`
-- `SCAN_LLM_TIMEOUT_SECONDS`
+This keeps CI green for low/medium-only findings and fails when high/critical findings are present.

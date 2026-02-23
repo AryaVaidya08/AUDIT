@@ -59,6 +59,13 @@ def _resolve_from_project(raw_path: str) -> Path:
     return candidate.resolve()
 
 
+def _resolve_runtime_path(raw_path: str) -> Path:
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    return candidate.resolve()
+
+
 @app.post("/index", response_model=IndexReport)
 def index_local_repo(payload: IndexRequest) -> IndexReport:
     repo_path = Path(payload.local_path).expanduser().resolve()
@@ -68,7 +75,7 @@ def index_local_repo(payload: IndexRequest) -> IndexReport:
         raise HTTPException(status_code=400, detail="local_path must be a directory")
 
     kb_dir = _resolve_from_project(settings.kb_dir)
-    persist_dir = _resolve_from_project(settings.chroma_persist_dir)
+    persist_dir = _resolve_runtime_path(settings.chroma_persist_dir)
     persist_dir.mkdir(parents=True, exist_ok=True)
 
     try:

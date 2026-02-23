@@ -17,6 +17,12 @@ __pycache__/
 
 # Repo cache
 .cache/
+.audit/
+scan_cache.sqlite3
+scan_resume.json
+report.json
+*.report.json
+*.tmp.json
 
 # Node
 node_modules/

@@ -36,6 +36,11 @@ class ChunkAuditResult:
     error_reason: str | None = None
 
 
+def llm_is_available(api_key: str | None = None) -> bool:
+    resolved_key = api_key if api_key is not None else os.getenv("OPENAI_API_KEY")
+    return OpenAI is not None and bool(resolved_key)
+
+
 def _extract_response_text(response: Any) -> str:
     choices = getattr(response, "choices", None)
     if not choices:
@@ -159,7 +164,7 @@ def _parse_findings(raw_output: str, chunk: CodeChunk) -> list[Finding]:
 
 def _build_openai_client(api_key: str | None = None) -> Any | None:
     resolved_key = api_key if api_key is not None else os.getenv("OPENAI_API_KEY")
-    if OpenAI is None or not resolved_key:
+    if not llm_is_available(resolved_key):
         return None
     return OpenAI(api_key=resolved_key)
 

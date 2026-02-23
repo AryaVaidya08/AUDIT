@@ -5,6 +5,13 @@ import os
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
+_RUNTIME_ARTIFACT_GLOBS: tuple[str, ...] = (
+    "report.json",
+    "*.report.json",
+    "scan_cache.sqlite3",
+    "scan_resume.json",
+)
+
 
 def _matches_glob(path: Path, root: Path, patterns: Sequence[str]) -> bool:
     relative = path.relative_to(root).as_posix()
@@ -22,7 +29,8 @@ def _is_included(
     include_filenames: Sequence[str],
     exclude_globs: Sequence[str],
 ) -> bool:
-    if _matches_glob(path, root, exclude_globs):
+    effective_exclude_globs = tuple(exclude_globs) + _RUNTIME_ARTIFACT_GLOBS
+    if _matches_glob(path, root, effective_exclude_globs):
         return False
     if path.name in include_filenames:
         return True
