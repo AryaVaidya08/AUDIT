@@ -1,4 +1,3 @@
-# Python
 .DS_Store
 .venv/
 __pycache__/
@@ -8,14 +7,11 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# Env
 .env
 .env.local
 
-# Chroma
 .chroma/
 
-# Repo cache
 .cache/
 .audit/
 scan_cache.sqlite3
@@ -24,8 +20,13 @@ report.json
 *.report.json
 *.tmp.json
 
-# Node
 node_modules/
 dist/
 build/
 .next/
+
+AGENTS.md
+AGENT_CONTEXT.md
+CLAUDE.md
+GEMINI.md
+agent_context/
