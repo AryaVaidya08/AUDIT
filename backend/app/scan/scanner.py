@@ -188,6 +188,8 @@ def scan_chunks(chunks: list[CodeChunk]) -> ScanReport:
             scan_started_at=started,
             scan_finished_at=finished,
             model="heuristic-ruleset",
+            chunking_strategy="fixed_lines_no_overlap",
+            embedding_model="",
             top_k=1,
             similarity_threshold=0.0,
             max_chunks=len(chunks),

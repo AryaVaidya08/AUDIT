@@ -41,6 +41,13 @@ def _render_hits(hits: list[RetrievalHit]) -> str:
     return json.dumps(payload, ensure_ascii=True, indent=2)
 
 
+def _render_numbered_chunk(chunk: CodeChunk) -> str:
+    numbered_lines: list[str] = []
+    for offset, line in enumerate(chunk.text.splitlines()):
+        numbered_lines.append(f"{chunk.start_line + offset:>6}: {line}")
+    return "\n".join(numbered_lines)
+
+
 def build_audit_messages(chunk: CodeChunk, kb_hits: list[RetrievalHit]) -> tuple[str, str]:
     system_prompt = dedent(
         f"""
@@ -52,6 +59,9 @@ def build_audit_messages(chunk: CodeChunk, kb_hits: list[RetrievalHit]) -> tuple
         confidence must be a number between 0 and 1
         message must be a single-line summary.
         references must be a JSON array of short strings.
+        start_line and end_line must be absolute file line numbers.
+        start_line and end_line must be within the provided chunk range.
+        For one-line findings, set end_line equal to start_line.
         If no security issue exists in this chunk, return [].
         """
     ).strip()
@@ -65,9 +75,9 @@ def build_audit_messages(chunk: CodeChunk, kb_hits: list[RetrievalHit]) -> tuple
         Security KB hits:
         {_render_hits(kb_hits)}
 
-        Code chunk:
+        Code chunk (line-numbered with absolute file lines):
         ```text
-        {chunk.text}
+        {_render_numbered_chunk(chunk)}
         ```
         """
     ).strip()

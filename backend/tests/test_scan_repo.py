@@ -126,6 +126,10 @@ def test_scan_repo_retries_then_skips_parse_error_and_dedups(monkeypatch: object
     assert report.stats.llm_calls == 3
     assert report.stats.llm_retries == 1
     assert report.stats.llm_parse_failures == 2
+    assert report.stats.llm_prompt_tokens == 0
+    assert report.stats.llm_completion_tokens == 0
+    assert report.stats.llm_total_tokens == 0
+    assert report.stats.llm_estimated_cost_usd == 0.0
     assert report.stats.chunks_skipped_parse_error == 1
     assert report.stats.findings_before_dedup == 2
     assert report.stats.findings_after_dedup == 1
@@ -133,8 +137,12 @@ def test_scan_repo_retries_then_skips_parse_error_and_dedups(monkeypatch: object
     assert report.stats.resume_used is False
     assert len(report.findings) == 1
     assert report.findings[0].file_path == "src/b.py"
+    assert report.findings[0].code_content != ""
+    assert len(report.findings[0].kb_evidence) == 1
     assert len(report.errors) == 1
     assert "llm_parse_error" in report.errors[0].reason
+    assert report.metadata.chunking_strategy == "fixed_lines_no_overlap"
+    assert report.metadata.embedding_model != ""
 
 
 def test_scan_repo_skips_low_similarity_without_llm_call(monkeypatch: object, tmp_path: Path) -> None:
@@ -288,3 +296,49 @@ def test_scan_repo_handles_connection_error_without_crashing(monkeypatch: object
     assert report.stats.findings_after_dedup == 1
     assert len(report.findings) == 1
     assert any("chunk_exception" in item.reason for item in report.errors)
+
+
+def test_scan_repo_adds_secret_heuristic_findings_when_llm_misses(monkeypatch: object, tmp_path: Path) -> None:
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    _patch_scan_dependencies(monkeypatch=monkeypatch, store_class=_HighScoreStore, repo_dir=repo_dir)
+    monkeypatch.setattr(
+        scan_repo_module,
+        "chunk_sources",
+        lambda sources, chunk_size_lines: [
+            CodeChunk(
+                file_path="src/keys.py",
+                start_line=1,
+                end_line=3,
+                text='API_KEY = "demo_hardcoded_key_123456789"\nprint("x")\nprint("y")',
+            )
+        ],
+    )
+
+    def _fake_audit(
+        chunk: CodeChunk,
+        kb_hits: list[RetrievalHit],
+        model: str,
+        repair_retries: int,
+        timeout_seconds: float | None = None,
+    ) -> ChunkAuditResult:
+        _ = (chunk, kb_hits, model, repair_retries, timeout_seconds)
+        return ChunkAuditResult(findings=[], llm_calls=1, llm_retries=0, parse_failures=0)
+
+    monkeypatch.setattr(scan_repo_module, "audit_chunk_with_llm", _fake_audit)
+
+    report = scan_repo_module.scan_repo(
+        path=repo_dir,
+        threshold=0.2,
+        max_chunks=10,
+        model="gpt-4.1-mini",
+        cache_enabled=False,
+    )
+
+    secret_findings = [finding for finding in report.findings if finding.vuln_type.startswith("SECRET.")]
+    assert len(secret_findings) >= 1
+    assert secret_findings[0].file_path == "src/keys.py"
+    assert secret_findings[0].start_line == 1
+    assert secret_findings[0].end_line == 1
+    assert "API_KEY" in secret_findings[0].code_content
+    assert len(secret_findings[0].kb_evidence) == 1

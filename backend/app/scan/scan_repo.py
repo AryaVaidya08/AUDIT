@@ -16,6 +16,7 @@ from app.scan.kb_loader import load_kb_documents
 from app.scan.llm_audit import ChunkAuditResult, audit_chunk_with_llm, llm_is_available
 from app.scan.prefilter import select_candidates
 from app.scan.prompts import PROMPT_VERSION
+from app.scan.scanner import scan_chunks as heuristic_scan_chunks
 from app.scan.resume import (
     ResumeCheckpoint,
     compute_candidate_index_hash,
@@ -40,6 +41,10 @@ logger = logging.getLogger("audit.scan")
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MAX_REPORTED_ERRORS = 250
 _SEVERITY_VALUES = {"low", "medium", "high", "critical"}
+_CHUNKING_STRATEGY = "fixed_lines_no_overlap"
+_MODEL_TOKEN_PRICING_USD_PER_1M: dict[str, tuple[float, float]] = {
+    "gpt-4.1-mini": (0.40, 1.60),
+}
 
 
 def _resolve_from_project(raw_path: str | Path) -> Path:
@@ -97,6 +102,87 @@ def _dedupe_findings(findings: list[Finding]) -> list[Finding]:
         deduped.append(finding)
     deduped.sort(key=lambda item: (item.file_path, item.start_line, item.vuln_type.lower()))
     return deduped
+
+
+def _estimate_llm_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    pricing = _MODEL_TOKEN_PRICING_USD_PER_1M.get(model)
+    if pricing is None:
+        for pricing_model, candidate in _MODEL_TOKEN_PRICING_USD_PER_1M.items():
+            if model.startswith(pricing_model):
+                pricing = candidate
+                break
+    if pricing is None:
+        return 0.0
+
+    prompt_price_per_1m, completion_price_per_1m = pricing
+    prompt_cost = (max(prompt_tokens, 0) / 1_000_000) * prompt_price_per_1m
+    completion_cost = (max(completion_tokens, 0) / 1_000_000) * completion_price_per_1m
+    return round(prompt_cost + completion_cost, 8)
+
+
+def _extract_code_content(chunk: CodeChunk, finding: Finding, context_lines: int = 2) -> str:
+    chunk_lines = chunk.text.splitlines()
+    if not chunk_lines:
+        return finding.evidence
+
+    start_line = max(chunk.start_line, finding.start_line - max(context_lines, 0))
+    end_line = min(chunk.end_line, finding.end_line + max(context_lines, 0))
+
+    relative_start = max(0, start_line - chunk.start_line)
+    relative_end = min(len(chunk_lines) - 1, end_line - chunk.start_line)
+    if relative_start > relative_end:
+        return finding.evidence
+
+    snippet = "\n".join(chunk_lines[relative_start : relative_end + 1]).strip()
+    return snippet or finding.evidence
+
+
+def _enrich_finding(finding: Finding, *, chunk: CodeChunk, kb_hits: list[RetrievalHit]) -> Finding:
+    payload = finding.model_dump(mode="json")
+    payload["code_content"] = _extract_code_content(chunk=chunk, finding=finding)
+    payload["kb_evidence"] = [hit.model_dump(mode="json") for hit in kb_hits[:3]]
+    return Finding.model_validate(payload)
+
+
+def _find_chunk_for_finding(finding: Finding, chunks: list[CodeChunk]) -> tuple[int, CodeChunk] | None:
+    for chunk_index, chunk in enumerate(chunks):
+        if chunk.file_path != finding.file_path:
+            continue
+        if chunk.start_line <= finding.start_line <= chunk.end_line:
+            return chunk_index, chunk
+    return None
+
+
+def _collect_secret_heuristic_findings(
+    *,
+    chunks: list[CodeChunk],
+    kb_hits_by_chunk: dict[int, list[RetrievalHit]],
+    repo_root: Path,
+) -> list[Finding]:
+    try:
+        heuristic_report = heuristic_scan_chunks(chunks)
+    except Exception as exc:
+        logger.warning("Secret heuristic scan failed: %s", exc)
+        return []
+
+    findings: list[Finding] = []
+    for finding in heuristic_report.findings:
+        if not finding.vuln_type.startswith("SECRET."):
+            continue
+        normalized = _normalize_finding(finding, repo_root=repo_root)
+        chunk_match = _find_chunk_for_finding(normalized, chunks)
+        if chunk_match is None:
+            findings.append(normalized)
+            continue
+        chunk_index, chunk = chunk_match
+        findings.append(
+            _enrich_finding(
+                normalized,
+                chunk=chunk,
+                kb_hits=kb_hits_by_chunk.get(chunk_index, []),
+            )
+        )
+    return findings
 
 
 def _fallback_query_kb(chunk: CodeChunk, top_k: int, kb_docs: list[tuple[str, str, list[str], str]]) -> list[RetrievalHit]:
@@ -198,6 +284,7 @@ def _finalize_report(
     max_chunks: int | None,
     chunk_size_lines: int,
     repair_retries: int,
+    embedding_model: str,
 ) -> ScanReport:
     scan_finished_at = datetime.now(timezone.utc)
     stats.duration_ms = int((scan_finished_at - scan_started_at).total_seconds() * 1000)
@@ -206,6 +293,8 @@ def _finalize_report(
         scan_started_at=scan_started_at,
         scan_finished_at=scan_finished_at,
         model=model_name,
+        chunking_strategy=_CHUNKING_STRATEGY,
+        embedding_model=embedding_model,
         top_k=top_k,
         similarity_threshold=threshold,
         max_chunks=max_chunks,
@@ -545,12 +634,20 @@ def scan_repo(
             if kind == "cache":
                 cached = payload if isinstance(payload, list) else []
                 normalized_cached = [_normalize_finding(finding, repo_root=repo_path) for finding in cached]
-                candidate_findings[next_apply_offset] = normalized_cached
+                enriched_cached = [
+                    _enrich_finding(
+                        finding,
+                        chunk=chunk,
+                        kb_hits=kb_hits_by_chunk.get(chunk_index, []),
+                    )
+                    for finding in normalized_cached
+                ]
+                candidate_findings[next_apply_offset] = enriched_cached
                 _emit_progress(
                     progress_callback,
                     (
                         f"[scan] candidate {next_apply_offset + 1}/{total_candidates} "
-                        f"cache_hit findings={len(normalized_cached)}"
+                        f"cache_hit findings={len(enriched_cached)}"
                     ),
                 )
             elif kind == "llm":
@@ -567,6 +664,9 @@ def scan_repo(
                     stats.llm_calls += audit_result.llm_calls
                     stats.llm_retries += audit_result.llm_retries
                     stats.llm_parse_failures += audit_result.parse_failures
+                    stats.llm_prompt_tokens += audit_result.prompt_tokens
+                    stats.llm_completion_tokens += audit_result.completion_tokens
+                    stats.llm_total_tokens += audit_result.total_tokens
 
                     if audit_result.skipped_parse_error:
                         stats.chunks_skipped_parse_error += 1
@@ -591,12 +691,20 @@ def scan_repo(
                         normalized_fresh = [
                             _normalize_finding(finding=finding, repo_root=repo_path) for finding in audit_result.findings
                         ]
-                        candidate_findings[next_apply_offset] = normalized_fresh
+                        enriched_fresh = [
+                            _enrich_finding(
+                                finding,
+                                chunk=chunk,
+                                kb_hits=kb_hits_by_chunk.get(chunk_index, []),
+                            )
+                            for finding in normalized_fresh
+                        ]
+                        candidate_findings[next_apply_offset] = enriched_fresh
                         _emit_progress(
                             progress_callback,
                             (
                                 f"[scan] candidate {next_apply_offset + 1}/{total_candidates} "
-                                f"findings={len(normalized_fresh)}"
+                                f"findings={len(enriched_fresh)}"
                             ),
                         )
                         if cache is not None:
@@ -613,7 +721,7 @@ def scan_repo(
                                             chunk_hash=chunk_hash,
                                             model=effective_model,
                                             prompt_version=PROMPT_VERSION,
-                                            findings=normalized_fresh,
+                                            findings=enriched_fresh,
                                         )
                                     ]
                                 )
@@ -686,9 +794,28 @@ def scan_repo(
     for position in range(total_candidates):
         ordered_findings.extend(candidate_findings.get(position, []))
 
+    secret_heuristic_findings = _collect_secret_heuristic_findings(
+        chunks=chunks,
+        kb_hits_by_chunk=kb_hits_by_chunk,
+        repo_root=repo_path,
+    )
+    if secret_heuristic_findings:
+        ordered_findings.extend(secret_heuristic_findings)
+        _emit_progress(
+            progress_callback,
+            f"[scan] heuristic secret findings added={len(secret_heuristic_findings)}",
+        )
+
     stats.findings_before_dedup = len(ordered_findings)
     deduped_findings = _dedupe_findings(ordered_findings)
     stats.findings_after_dedup = len(deduped_findings)
+    if stats.llm_total_tokens <= 0:
+        stats.llm_total_tokens = stats.llm_prompt_tokens + stats.llm_completion_tokens
+    stats.llm_estimated_cost_usd = _estimate_llm_cost_usd(
+        effective_model,
+        prompt_tokens=stats.llm_prompt_tokens,
+        completion_tokens=stats.llm_completion_tokens,
+    )
 
     scan_finished_at = datetime.now(timezone.utc)
     stats.duration_ms = int((scan_finished_at - scan_started_at).total_seconds() * 1000)
@@ -697,6 +824,8 @@ def scan_repo(
         scan_started_at=scan_started_at,
         scan_finished_at=scan_finished_at,
         model=effective_model,
+        chunking_strategy=_CHUNKING_STRATEGY,
+        embedding_model=settings.embedding_model,
         top_k=effective_top_k,
         similarity_threshold=effective_threshold,
         max_chunks=effective_max_chunks,

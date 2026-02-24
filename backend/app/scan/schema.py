@@ -45,6 +45,8 @@ class Finding(StrictModel):
     end_line: int = Field(ge=1)
     message: str = Field(min_length=1)
     evidence: str = Field(min_length=1)
+    code_content: str = ""
+    kb_evidence: list["RetrievalHit"] = Field(default_factory=list)
     recommendation: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -65,6 +67,10 @@ class ScanStats(StrictModel):
     cache_misses: int = Field(default=0, ge=0)
     llm_calls: int = Field(default=0, ge=0)
     llm_retries: int = Field(default=0, ge=0)
+    llm_prompt_tokens: int = Field(default=0, ge=0)
+    llm_completion_tokens: int = Field(default=0, ge=0)
+    llm_total_tokens: int = Field(default=0, ge=0)
+    llm_estimated_cost_usd: float = Field(default=0.0, ge=0.0)
     skipped_low_similarity: int = Field(default=0, ge=0)
     llm_parse_failures: int = Field(default=0, ge=0)
     chunks_skipped_parse_error: int = Field(default=0, ge=0)
@@ -76,11 +82,13 @@ class ScanStats(StrictModel):
 
 
 class ScanMetadata(StrictModel):
-    schema_version: str = "1.0.0"
+    schema_version: str = "1.1.0"
     repo_path: str
     scan_started_at: datetime
     scan_finished_at: datetime
     model: str
+    chunking_strategy: str = "fixed_lines_no_overlap"
+    embedding_model: str = ""
     top_k: int = Field(ge=1)
     similarity_threshold: float = Field(ge=0.0, le=1.0)
     max_chunks: int | None = Field(default=None, ge=1)

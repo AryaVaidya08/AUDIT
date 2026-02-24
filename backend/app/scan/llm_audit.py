@@ -32,6 +32,9 @@ class ChunkAuditResult:
     llm_calls: int = 0
     llm_retries: int = 0
     parse_failures: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
     skipped_parse_error: bool = False
     error_reason: str | None = None
 
@@ -66,6 +69,24 @@ def _extract_response_text(response: Any) -> str:
     return str(content).strip()
 
 
+def _extract_token_usage(response: Any) -> tuple[int, int, int]:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return 0, 0, 0
+
+    if isinstance(usage, dict):
+        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+        total_tokens = int(usage.get("total_tokens", 0) or 0)
+    else:
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
+    if total_tokens <= 0:
+        total_tokens = max(prompt_tokens + completion_tokens, 0)
+    return max(prompt_tokens, 0), max(completion_tokens, 0), max(total_tokens, 0)
+
+
 def _normalize_confidence(raw_value: Any) -> float:
     try:
         value = float(raw_value)
@@ -81,12 +102,24 @@ def _normalize_severity(raw_value: Any) -> str:
     return "medium"
 
 
-def _normalize_line(raw_value: Any, fallback: int) -> int:
+def _parse_positive_int(raw_value: Any, fallback: int) -> int:
     try:
         line = int(raw_value)
     except (TypeError, ValueError):
         return fallback
     return max(1, line)
+
+
+def _normalize_line_in_chunk(raw_value: Any, *, chunk: CodeChunk, fallback: int) -> int:
+    line = _parse_positive_int(raw_value, fallback=fallback)
+    if chunk.start_line <= line <= chunk.end_line:
+        return line
+
+    chunk_length = max(1, chunk.end_line - chunk.start_line + 1)
+    if 1 <= line <= chunk_length:
+        return chunk.start_line + (line - 1)
+
+    return min(max(line, chunk.start_line), chunk.end_line)
 
 
 def _normalize_references(raw_value: Any) -> list[str]:
@@ -117,8 +150,8 @@ def _coerce_finding_payload(item: dict[str, Any], chunk: CodeChunk) -> dict[str,
     vuln_type = str(item.get("vuln_type") or item.get("rule_id") or item.get("title") or "unspecified").strip()
     if not vuln_type:
         vuln_type = "unspecified"
-    start_line = _normalize_line(item.get("start_line"), chunk.start_line)
-    end_line = _normalize_line(item.get("end_line"), start_line)
+    start_line = _normalize_line_in_chunk(item.get("start_line"), chunk=chunk, fallback=chunk.start_line)
+    end_line = _normalize_line_in_chunk(item.get("end_line"), chunk=chunk, fallback=start_line)
     if end_line < start_line:
         end_line = start_line
     message = _normalize_one_liner(item.get("message"), fallback=f"Potential issue: {vuln_type}")
@@ -179,7 +212,13 @@ def _normalize_timeout(timeout_seconds: float | None) -> float:
     return max(1.0, normalized)
 
 
-def _chat(client: Any, model: str, system_prompt: str, user_prompt: str, timeout_seconds: float) -> str:
+def _chat(
+    client: Any,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    timeout_seconds: float,
+) -> tuple[str, int, int, int]:
     response = client.chat.completions.create(
         model=model,
         temperature=0,
@@ -189,7 +228,8 @@ def _chat(client: Any, model: str, system_prompt: str, user_prompt: str, timeout
             {"role": "user", "content": user_prompt},
         ],
     )
-    return _extract_response_text(response)
+    prompt_tokens, completion_tokens, total_tokens = _extract_token_usage(response)
+    return _extract_response_text(response), prompt_tokens, completion_tokens, total_tokens
 
 
 def audit_chunk_with_llm(
@@ -208,6 +248,9 @@ def audit_chunk_with_llm(
     llm_calls = 0
     llm_retries = 0
     parse_failures = 0
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_tokens = 0
     raw_output = ""
     last_error = "unknown_error"
     effective_timeout = _normalize_timeout(timeout_seconds)
@@ -220,7 +263,7 @@ def audit_chunk_with_llm(
             system_prompt, user_prompt = build_repair_messages(raw_output=raw_output)
 
         try:
-            raw_output = _chat(
+            raw_output, call_prompt_tokens, call_completion_tokens, call_total_tokens = _chat(
                 llm_client,
                 model=model,
                 system_prompt=system_prompt,
@@ -228,12 +271,18 @@ def audit_chunk_with_llm(
                 timeout_seconds=effective_timeout,
             )
             llm_calls += 1
+            prompt_tokens += call_prompt_tokens
+            completion_tokens += call_completion_tokens
+            total_tokens += call_total_tokens
             findings = _parse_findings(raw_output=raw_output, chunk=chunk)
             return ChunkAuditResult(
                 findings=findings,
                 llm_calls=llm_calls,
                 llm_retries=llm_retries,
                 parse_failures=parse_failures,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
             )
         except Exception as exc:
             parse_failures += 1
@@ -245,6 +294,9 @@ def audit_chunk_with_llm(
         llm_calls=llm_calls,
         llm_retries=llm_retries,
         parse_failures=parse_failures,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
         skipped_parse_error=True,
         error_reason=last_error,
     )
