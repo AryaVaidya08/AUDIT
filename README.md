@@ -1,6 +1,6 @@
 # AUDIT
 
-Local-first repository security scanner with deterministic fallback findings when no LLM API key is configured.
+Local-first repository security scanner with LLM-powered analysis, cache/resume support, and JSON reporting.
 
 ## Quickstart
 
@@ -11,28 +11,34 @@ cd /path/to/AUDIT
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
-cd demo_vuln_repo
-audit-code . --out report.json
+python -m pip install openai
+export OPENAI_API_KEY="your-key"
+audit-code demo_vuln_repo --out report.json
 ```
 
 Keep the virtual environment activated so `audit-code` resolves to the local editable install and not the macOS system `audit` binary.
+`python -m audit ...` is equivalent to `audit-code ...`.
+
+### Runtime requirements
+
+- `openai` must be installed and `OPENAI_API_KEY` must be set, otherwise scans exit with code `2`.
+- `chromadb` is optional. If Chroma/KB indexing fails, AUDIT falls back to a simpler KB retrieval path.
+- `.env` and `.env.local` at the repo root are auto-loaded by the backend config module.
 
 ## What you should see
 
 `audit-code` writes a full JSON report to the path given by `--out` (default: `report.json` in the current directory) and prints a readable summary to stdout.
 
-Example output:
+Example summary shape:
 
 ```text
-Severity counts: critical=0, high=5, medium=0, low=0
+Severity counts: critical=<n>, high=<n>, medium=<n>, low=<n>
 Top findings (up to 5):
-1. [high] routes.js:4 AUTH.MISSING_ADMIN_GUARD - Privileged route may be missing an auth check
-2. [high] vuln_app.py:4 SECRET.HARDCODED_ASSIGNMENT - Hardcoded secret assignment
-3. [high] vuln_app.py:8 SQLI.DYNAMIC_QUERY - Potential SQL injection via dynamic query
-4. [high] vuln_app.py:14 CODE_EXEC.DYNAMIC_EVAL - Dynamic code execution with eval/exec
-5. [high] vuln_app.py:18 DESERIALIZE.UNSAFE_LOAD - Unsafe deserialization call
-Full report: /absolute/path/to/demo_vuln_repo/report.json
+(none)
+Full report: /absolute/path/to/report.json
 ```
+
+Finding counts and individual findings depend on model responses, thresholds, and cache state.
 
 ## CLI
 
@@ -79,16 +85,17 @@ Full report: /absolute/path/to/demo_vuln_repo/report.json
 
 ### Caching
 
-AUDIT can cache chunk-level results so repeated scans of unchanged code run faster. Cache hits reuse prior findings; cache misses are rescanned. AUDIT does not modify any files in the scanned repository.
+AUDIT can cache chunk-level results so repeated scans of unchanged code run faster. Cache hits reuse prior findings; cache misses are rescanned.
 
 | Flag | Description | Default |
 |---|---|---|
-| `--cache / --no-cache` | Enable or disable the incremental SQLite cache | on |
+| `--cache / --no-cache` | Enable or disable the incremental SQLite cache | env default (`SCAN_CACHE_ENABLED`, defaults to on) |
 | `--cache-scope user\|repo` | Where the cache file lives when `--cache-path` is not set | `user` |
 | `--cache-path PATH` | Explicit path to the SQLite cache file | — |
 
 `--cache-scope user` places the cache in a shared location reused across all repos.
 `--cache-scope repo` stores the cache inside the scanned repo at `.audit/scan_cache.sqlite3`.
+`--out` controls where the JSON report is written and can also target the scanned repo.
 
 ### Resume / checkpoint
 
@@ -131,6 +138,8 @@ audit-code help
 
 ```bash
 python -m pip install -e .
+python -m pip install openai
+export OPENAI_API_KEY="your-key"
 audit-code . --out report.json --fail-on high
 ```
 
