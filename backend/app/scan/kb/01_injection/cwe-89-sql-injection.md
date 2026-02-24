@@ -1,5 +1,11 @@
 id: cwe-89-sql-injection
 title: SQL Injection (OWASP Injection, CWE-89)
+domain: injection
+weakness_type: sql_injection
+cwe: CWE-89
+owasp_2021: A03:Injection
+exploit_classes: data_exfil,auth_bypass
+languages: python,node,java,php,go,ruby
 tags: cwe-89,owasp-a03,sqli,injection
 severity_guidance: high
 ---

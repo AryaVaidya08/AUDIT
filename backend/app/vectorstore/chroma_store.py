@@ -55,14 +55,22 @@ class ChromaStore:
 
         payloads = [
             "\n".join(
-                [
+                line
+                for line in [
                     f"id: {doc.id}",
                     f"title: {doc.title}",
+                    f"domain: {doc.domain}" if doc.domain else "",
+                    f"weakness_type: {doc.weakness_type}" if doc.weakness_type else "",
+                    f"cwe: {doc.cwe}" if doc.cwe else "",
+                    f"owasp_2021: {doc.owasp_2021}" if doc.owasp_2021 else "",
+                    f"exploit_classes: {', '.join(doc.exploit_classes)}" if doc.exploit_classes else "",
+                    f"languages: {', '.join(doc.languages)}" if doc.languages else "",
                     f"tags: {', '.join(doc.tags)}",
                     f"severity_guidance: {doc.severity_guidance}",
                     "",
                     doc.content,
                 ]
+                if line
             )
             for doc in docs
         ]
@@ -73,6 +81,9 @@ class ChromaStore:
                 "title": doc.title,
                 "tags": ",".join(doc.tags),
                 "severity_guidance": doc.severity_guidance,
+                "domain": doc.domain,
+                "cwe": doc.cwe,
+                "owasp_2021": doc.owasp_2021,
             }
             for doc in docs
         ]
@@ -136,17 +147,19 @@ class ChromaStore:
             if score < threshold:
                 continue
 
-            tags_value = metadata.get("tags", "") if isinstance(metadata, dict) else ""
+            meta = metadata if isinstance(metadata, dict) else {}
+            tags_value = meta.get("tags", "")
             tags = [tag.strip() for tag in str(tags_value).split(",") if tag.strip()]
             hits.append(
                 RetrievalHit(
                     id=str(doc_id),
-                    title=str(metadata.get("title", doc_id) if isinstance(metadata, dict) else doc_id),
+                    title=str(meta.get("title", doc_id)),
                     score=score,
-                    severity_guidance=str(
-                        metadata.get("severity_guidance", "medium") if isinstance(metadata, dict) else "medium"
-                    ),
+                    severity_guidance=str(meta.get("severity_guidance", "medium")),
                     tags=tags,
+                    domain=str(meta.get("domain", "")),
+                    cwe=str(meta.get("cwe", "")),
+                    owasp_2021=str(meta.get("owasp_2021", "")),
                     preview=str(raw_preview)[:240],
                 )
             )

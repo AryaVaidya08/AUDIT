@@ -1,5 +1,11 @@
 id: cors-misconfig
 title: CORS Misconfiguration
+domain: config_deploy
+weakness_type: cors_misconfiguration
+cwe: CWE-942
+owasp_2021: A05:Security Misconfiguration
+exploit_classes: data_exfil,session_hijack
+languages: python,node,java,go,php,ruby
 tags: cors,owasp-a05,misconfiguration,web
 severity_guidance: medium
 ---

@@ -1,5 +1,11 @@
 id: cwe-798-hardcoded-creds
 title: Hardcoded Credentials (CWE-798)
+domain: crypto_secrets
+weakness_type: hardcoded_credentials
+cwe: CWE-798
+owasp_2021: A07:Identification and Authentication Failures
+exploit_classes: auth_bypass,data_exfil
+languages: python,node,java,go,php,ruby
 tags: cwe-798,owasp-a07,secrets,credentials
 severity_guidance: high
 ---

@@ -111,6 +111,12 @@ class KBDocument(StrictModel):
     title: str = Field(min_length=1)
     tags: list[str] = Field(default_factory=list)
     severity_guidance: str = Field(min_length=1)
+    domain: str = ""
+    weakness_type: str = ""
+    cwe: str = ""
+    owasp_2021: str = ""
+    exploit_classes: list[str] = Field(default_factory=list)
+    languages: list[str] = Field(default_factory=list)
     content: str = Field(min_length=1)
 
 
@@ -120,6 +126,9 @@ class RetrievalHit(StrictModel):
     score: float = Field(ge=0.0, le=1.0)
     severity_guidance: str
     tags: list[str] = Field(default_factory=list)
+    domain: str = ""
+    cwe: str = ""
+    owasp_2021: str = ""
     preview: str = ""
 
 

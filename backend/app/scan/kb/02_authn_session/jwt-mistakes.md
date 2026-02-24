@@ -1,5 +1,11 @@
 id: jwt-mistakes
-title: JWT Validation Mistakes
+title: JWT Validation Mistakes (CWE-347)
+domain: authn_session
+weakness_type: jwt_misconfiguration
+cwe: CWE-347
+owasp_2021: A07:Identification and Authentication Failures
+exploit_classes: auth_bypass,privesc
+languages: python,node,java,go,php,ruby
 tags: jwt,auth,cwe-347,owasp-a07
 severity_guidance: high
 ---

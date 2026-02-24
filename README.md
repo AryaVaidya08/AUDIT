@@ -7,19 +7,19 @@ Local-first repository security scanner with deterministic fallback findings whe
 Use these exact commands from a fresh clone:
 
 ```bash
-cd /Users/admin/Downloads/AUDIT
+cd /path/to/AUDIT
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
 cd demo_vuln_repo
-audit . --out report.json
+audit-code . --out report.json
 ```
 
-Important: keep the virtual environment activated so `audit` resolves to the local editable install.
+Keep the virtual environment activated so `audit-code` resolves to the local editable install and not the macOS system `audit` binary.
 
 ## What you should see
 
-`audit` writes a full JSON report file and prints a readable summary.
+`audit-code` writes a full JSON report to the path given by `--out` (default: `report.json` in the current directory) and prints a readable summary to stdout.
 
 Example output:
 
@@ -36,46 +36,102 @@ Full report: /absolute/path/to/demo_vuln_repo/report.json
 
 ## CLI
 
-Default behavior:
+### Commands
+
+| Command | Description |
+|---|---|
+| `audit-code [PATH]` | Scan a repository (default command, PATH defaults to `.`) |
+| `audit-code scan [PATH]` | Explicit form of the scan command |
+| `audit-code help` | Print full usage reference |
+
+### Core options
+
+| Flag | Description | Default |
+|---|---|---|
+| `--out PATH` | Where to write the full JSON report | `report.json` |
+| `--fail-on SEVERITY` | Exit `1` if any finding meets/exceeds this level (`low\|medium\|high\|critical`) | off |
+| `--model NAME` | LLM model name to use for analysis | env default |
+| `--progress / --no-progress` | Stream per-chunk progress to stderr | on |
+
+### Scan tuning
+
+| Flag | Description |
+|---|---|
+| `--top-k INT` | KB documents retrieved per code chunk (min 1) |
+| `--threshold FLOAT` | Minimum similarity score for a KB doc to be used (0.0–1.0) |
+| `--max-chunks INT` | Cap on total chunks analysed (min 1) |
+| `--chunk-size-lines INT` | Lines of code per chunk sent to the LLM (min 1) |
+| `--llm-timeout-seconds FLOAT` | Per-call LLM timeout in seconds (min 1.0) |
+| `--repair-retries INT` | Retries on malformed LLM JSON responses (min 0) |
+
+### Prefilter options
+
+| Flag | Description |
+|---|---|
+| `--prefilter-min-score FLOAT` | Discard chunks below this heuristic score (0.0–1.0) |
+| `--prefilter-max-candidates INT` | Max chunks forwarded to LLM/cache after pre-filtering (min 1) |
+
+### Concurrency
+
+| Flag | Description |
+|---|---|
+| `--max-inflight-llm-calls INT` | Maximum concurrent LLM requests in flight (min 1) |
+
+### Caching
+
+AUDIT can cache chunk-level results so repeated scans of unchanged code run faster. Cache hits reuse prior findings; cache misses are rescanned. AUDIT does not modify any files in the scanned repository.
+
+| Flag | Description | Default |
+|---|---|---|
+| `--cache / --no-cache` | Enable or disable the incremental SQLite cache | on |
+| `--cache-scope user\|repo` | Where the cache file lives when `--cache-path` is not set | `user` |
+| `--cache-path PATH` | Explicit path to the SQLite cache file | — |
+
+`--cache-scope user` places the cache in a shared location reused across all repos.
+`--cache-scope repo` stores the cache inside the scanned repo at `.audit/scan_cache.sqlite3`.
+
+### Resume / checkpoint
+
+| Flag | Description |
+|---|---|
+| `--resume / --no-resume` | Resume from a matching checkpoint when available |
+| `--checkpoint-path PATH` | Path to the checkpoint JSON file |
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Scan completed (findings may still exist) |
+| `1` | Scan completed and `--fail-on` threshold was met |
+| `2` | Argument, config, or runtime error |
+
+## Examples
 
 ```bash
-audit . --out report.json
+# Scan current directory, write report to report.json
+audit-code .
+
+# Scan a specific repo, save report to a custom path
+audit-code /path/to/repo --out /tmp/my-report.json
+
+# Fail CI if any high or critical findings are found
+audit-code . --fail-on high
+
+# Resume an interrupted scan with caching enabled
+audit-code . --resume --cache
+
+# Disable progress output and limit concurrency
+audit-code . --no-progress --max-inflight-llm-calls 2
+
+# Print full usage reference
+audit-code help
 ```
-
-Explicit subcommand (same scan logic):
-
-```bash
-audit scan . --out report.json
-```
-
-Common flags:
-
-- `--out PATH`: write full JSON report (default: `report.json` in the current directory)
-- `--fail-on {low|medium|high|critical}`: exit `1` when any finding meets/exceeds the threshold
-- `--progress/--no-progress`: show per-chunk progress on stderr
-- advanced scan tuning flags are also available (`--top-k`, `--threshold`, `--max-chunks`, cache/resume flags, etc.)
-
-Exit codes:
-
-- `0`: scan completed (even if findings exist)
-- `1`: scan completed and `--fail-on` threshold was met
-- `2`: argument/config/runtime error
-
-## Caching (plain terms)
-
-- AUDIT can cache chunk-level results so repeated scans of unchanged code run faster.
-- Cache hits reuse prior findings; cache misses are rescanned.
-- You can disable cache with `--no-cache` or switch cache location with `--cache-scope` / `--cache-path`.
-
-## Safety
-
-AUDIT does not modify code in the scanned repository. It only reads files and writes report/cache artifacts.
 
 ## CI example
 
 ```bash
 python -m pip install -e .
-audit . --out report.json --fail-on high
+audit-code . --out report.json --fail-on high
 ```
 
 This keeps CI green for low/medium-only findings and fails when high/critical findings are present.

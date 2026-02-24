@@ -1,5 +1,11 @@
 id: cwe-79-xss
 title: Cross-Site Scripting (OWASP XSS, CWE-79)
+domain: input_output_web
+weakness_type: cross_site_scripting
+cwe: CWE-79
+owasp_2021: A03:Injection
+exploit_classes: session_hijack,data_exfil
+languages: javascript,typescript,python,php,java,ruby
 tags: cwe-79,owasp-a03,xss,frontend
 severity_guidance: medium
 ---

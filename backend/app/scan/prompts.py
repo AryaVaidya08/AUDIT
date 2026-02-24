@@ -25,14 +25,17 @@ def _render_hits(hits: list[RetrievalHit]) -> str:
     if not hits:
         return "[]"
     payload = [
-        {
+        {k: v for k, v in {
             "id": hit.id,
             "title": hit.title,
             "score": round(hit.score, 4),
             "severity_guidance": hit.severity_guidance,
+            "domain": hit.domain or None,
+            "cwe": hit.cwe or None,
+            "owasp_2021": hit.owasp_2021 or None,
             "tags": hit.tags,
             "preview": hit.preview,
-        }
+        }.items() if v is not None}
         for hit in hits
     ]
     return json.dumps(payload, ensure_ascii=True, indent=2)

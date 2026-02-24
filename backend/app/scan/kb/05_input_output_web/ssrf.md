@@ -1,5 +1,11 @@
 id: ssrf
-title: Server-Side Request Forgery (SSRF)
+title: Server-Side Request Forgery (SSRF, CWE-918)
+domain: input_output_web
+weakness_type: server_side_request_forgery
+cwe: CWE-918
+owasp_2021: A10:Server-Side Request Forgery
+exploit_classes: data_exfil,cloud_credential_theft
+languages: python,node,java,go,php,ruby
 tags: ssrf,cwe-918,owasp-a10,network
 severity_guidance: high
 ---

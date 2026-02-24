@@ -5,6 +5,11 @@ from pathlib import Path
 from app.scan.schema import KBDocument
 
 _REQUIRED_FIELDS = ("id", "title", "tags", "severity_guidance")
+_LIST_FIELDS = ("tags", "exploit_classes", "languages")
+
+
+def _parse_list_field(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def _parse_kb_markdown(path: Path) -> KBDocument:
@@ -33,7 +38,6 @@ def _parse_kb_markdown(path: Path) -> KBDocument:
     if missing:
         raise ValueError(f"KB doc missing required metadata ({', '.join(missing)}): {path}")
 
-    tags = [tag.strip() for tag in metadata["tags"].split(",") if tag.strip()]
     content = "\n".join(lines[content_start_index:]).strip()
     if not content:
         raise ValueError(f"KB doc content is empty: {path}")
@@ -41,8 +45,14 @@ def _parse_kb_markdown(path: Path) -> KBDocument:
     return KBDocument(
         id=metadata["id"],
         title=metadata["title"],
-        tags=tags,
+        tags=_parse_list_field(metadata.get("tags", "")),
         severity_guidance=metadata["severity_guidance"],
+        domain=metadata.get("domain", ""),
+        weakness_type=metadata.get("weakness_type", ""),
+        cwe=metadata.get("cwe", ""),
+        owasp_2021=metadata.get("owasp_2021", ""),
+        exploit_classes=_parse_list_field(metadata.get("exploit_classes", "")),
+        languages=_parse_list_field(metadata.get("languages", "")),
         content=content,
     )
 
@@ -54,7 +64,7 @@ def load_kb_documents(kb_dir: Path) -> list[KBDocument]:
         raise NotADirectoryError(f"KB directory is not a directory: {kb_dir}")
 
     docs: list[KBDocument] = []
-    for path in sorted(kb_dir.glob("*.md")):
+    for path in sorted(kb_dir.rglob("*.md")):
         docs.append(_parse_kb_markdown(path))
 
     ids = [doc.id for doc in docs]

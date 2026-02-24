@@ -1,5 +1,11 @@
 id: path-traversal
 title: Path Traversal (CWE-22)
+domain: filesystem_os
+weakness_type: path_traversal
+cwe: CWE-22
+owasp_2021: A01:Broken Access Control
+exploit_classes: data_exfil,rce
+languages: python,node,java,go,php,ruby
 tags: cwe-22,path-traversal,filesystem,owasp-a01
 severity_guidance: high
 ---

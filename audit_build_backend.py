@@ -14,7 +14,7 @@ REQUIRES_DIST = (
     "pydantic>=2.6,<3",
     "typer>=0.12,<1",
 )
-ENTRYPOINT = "audit = audit.cli:entrypoint"
+ENTRYPOINT = "audit-code = audit.cli:entrypoint"
 
 
 def _repo_root() -> Path:

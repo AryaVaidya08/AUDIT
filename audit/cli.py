@@ -51,7 +51,7 @@ def _normalize_args(raw_args: Sequence[str]) -> list[str]:
     if not raw_args:
         return ["scan", "."]
 
-    if raw_args[0] in {"scan"} | _ROOT_HELP_FLAGS:
+    if raw_args[0] in {"scan", "help"} | _ROOT_HELP_FLAGS:
         return list(raw_args)
     return ["scan", *raw_args]
 
@@ -255,10 +255,116 @@ def scan(
     )
 
 
+_HELP_TEXT = """\
+audit-code — local-first security scanner
+==========================================
+
+USAGE
+  audit-code [PATH] [OPTIONS]
+  audit-code scan [PATH] [OPTIONS]
+  audit-code help
+
+PATH defaults to the current directory when omitted.
+
+COMMANDS
+  scan      Scan a repository for security vulnerabilities (default command).
+  help      Print this help message and exit.
+
+CORE OPTIONS
+  --out PATH
+      Where to write the full JSON report.
+      Default: report.json in the current working directory.
+
+  --fail-on SEVERITY
+      Exit with code 1 if any finding meets or exceeds this severity level.
+      Choices: low | medium | high | critical
+      Example: --fail-on high
+
+  --model NAME
+      LLM model name to use for analysis.
+      Example: --model claude-opus-4-6
+
+SCAN TUNING
+  --top-k INT (min 1)
+      Number of knowledge-base documents retrieved per code chunk.
+
+  --threshold FLOAT (0.0 – 1.0)
+      Minimum similarity score for a KB doc to be used.
+
+  --max-chunks INT (min 1)
+      Cap on the total number of code chunks analysed.
+
+  --chunk-size-lines INT (min 1)
+      Lines of code per chunk sent to the LLM.
+
+  --llm-timeout-seconds FLOAT (min 1.0)
+      Per-call timeout for LLM requests.
+
+  --repair-retries INT (min 0)
+      How many times to retry malformed LLM JSON responses.
+
+PREFILTER OPTIONS
+  --prefilter-min-score FLOAT (0.0 – 1.0)
+      Discard chunks whose heuristic pre-filter score is below this value.
+
+  --prefilter-max-candidates INT (min 1)
+      Maximum number of chunks forwarded to the LLM/cache stage after pre-filtering.
+
+CONCURRENCY
+  --max-inflight-llm-calls INT (min 1)
+      Maximum number of concurrent LLM requests in flight at once.
+
+CACHING
+  --cache / --no-cache
+      Enable or disable the incremental SQLite result cache.
+
+  --cache-scope user | repo
+      Where the default cache file is stored when --cache-path is not set.
+        user  — shared across all repos (default)
+        repo  — stored inside the scanned repo at .audit/scan_cache.sqlite3
+
+  --cache-path PATH
+      Explicit path to the SQLite cache file.
+
+RESUME / CHECKPOINT
+  --resume / --no-resume
+      Resume a previous interrupted scan from a matching checkpoint.
+
+  --checkpoint-path PATH
+      Path to the checkpoint JSON file used for resume.
+
+OUTPUT
+  --progress / --no-progress
+      Stream per-chunk progress messages to stderr (default: on).
+
+EXAMPLES
+  # Scan current directory, write report to report.json
+  audit-code .
+
+  # Scan a specific repo, save report elsewhere
+  audit-code /path/to/repo --out /tmp/my-report.json
+
+  # Fail CI if any high or critical findings are found
+  audit-code . --fail-on high
+
+  # Resume an interrupted scan with caching enabled
+  audit-code . --resume --cache
+
+  # Disable progress output and limit concurrency
+  audit-code . --no-progress --max-inflight-llm-calls 2
+"""
+
+
+@app.command("help")
+def help_command() -> None:
+    """Print detailed usage information for all commands and options."""
+    typer.echo(_HELP_TEXT)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _normalize_args(sys.argv[1:] if argv is None else list(argv))
     try:
-        result = app(args=args, prog_name="audit", standalone_mode=False)
+        result = app(args=args, prog_name="audit-code", standalone_mode=False)
     except click.exceptions.Exit as exc:
         return int(exc.exit_code)
     except click.ClickException as exc:

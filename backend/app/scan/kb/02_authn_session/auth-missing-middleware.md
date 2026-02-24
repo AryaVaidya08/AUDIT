@@ -1,5 +1,11 @@
 id: auth-missing-middleware
 title: Missing Authentication or Authorization Middleware
+domain: authn_session
+weakness_type: missing_auth_check
+cwe: CWE-306
+owasp_2021: A01:Broken Access Control
+exploit_classes: auth_bypass,privesc
+languages: python,node,java,go,php,ruby
 tags: auth,access-control,owasp-a01,cwe-306
 severity_guidance: high
 ---

@@ -1,5 +1,11 @@
 id: command-injection
 title: Command Injection (CWE-78)
+domain: injection
+weakness_type: command_injection
+cwe: CWE-78
+owasp_2021: A03:Injection
+exploit_classes: rce
+languages: python,node,java,php,go,ruby
 tags: cwe-78,command-injection,rce,owasp-a03
 severity_guidance: critical
 ---
