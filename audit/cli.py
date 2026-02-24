@@ -152,7 +152,6 @@ def _scan_command(
             model=model,
             chunk_size_lines=chunk_size_lines,
             progress_callback=progress_callback,
-            heuristic_fallback=True,
         )
     except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
         typer.echo(f"ERROR: {exc}", err=True)

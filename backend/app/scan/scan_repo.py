@@ -24,7 +24,6 @@ from app.scan.resume import (
     load_checkpoint,
     save_checkpoint,
 )
-from app.scan.scanner import scan_chunks as scan_chunks_with_heuristics
 from app.scan.schema import (
     CodeChunk,
     Finding,
@@ -233,7 +232,6 @@ def scan_repo(
     cache_path: str | Path | None = None,
     checkpoint_path: str | Path | None = None,
     progress_callback: Callable[[str], None] | None = None,
-    heuristic_fallback: bool = False,
 ) -> ScanReport:
     scan_started_at = datetime.now(timezone.utc)
     repo_path = Path(path).expanduser().resolve()
@@ -298,39 +296,11 @@ def scan_repo(
         ),
     )
 
-    if heuristic_fallback and not llm_is_available():
-        _emit_progress(progress_callback, "[scan] llm unavailable; using deterministic heuristic fallback")
-        fallback_report = scan_chunks_with_heuristics(chunks)
-        normalized_findings = [
-            _normalize_finding(finding=finding, repo_root=repo_path) for finding in fallback_report.findings
-        ]
-        deduped_findings = _dedupe_findings(normalized_findings)
-        stats.chunks_prefiltered = len(chunks)
-        stats.chunks_sent_to_llm = 0
-        stats.findings_before_dedup = len(normalized_findings)
-        stats.findings_after_dedup = len(deduped_findings)
-        report = _finalize_report(
-            repo_path=repo_path,
-            scan_started_at=scan_started_at,
-            stats=stats,
-            findings=deduped_findings,
-            errors=[],
-            model_name="heuristic-ruleset",
-            top_k=effective_top_k,
-            threshold=effective_threshold,
-            max_chunks=effective_max_chunks,
-            chunk_size_lines=effective_chunk_size_lines,
-            repair_retries=effective_repair_retries,
+    if not llm_is_available():
+        raise RuntimeError(
+            "LLM is not available: the openai package is not installed or OPENAI_API_KEY is not set. "
+            "Install openai and set your API key to use this tool."
         )
-        _emit_progress(
-            progress_callback,
-            (
-                f"[scan] done findings={report.stats.findings_after_dedup} llm_calls={report.stats.llm_calls} "
-                f"parse_failures={report.stats.llm_parse_failures} cache_hits={report.stats.cache_hits} "
-                f"cache_misses={report.stats.cache_misses} duration_ms={report.stats.duration_ms}"
-            ),
-        )
-        return report
 
     kb_dir = _resolve_from_project(settings.kb_dir)
     persist_dir = _resolve_runtime_path(settings.chroma_persist_dir)
@@ -715,13 +685,6 @@ def scan_repo(
     ordered_findings: list[Finding] = []
     for position in range(total_candidates):
         ordered_findings.extend(candidate_findings.get(position, []))
-
-    if heuristic_fallback and not ordered_findings:
-        _emit_progress(progress_callback, "[scan] no findings from primary path; applying heuristic fallback findings")
-        fallback_report = scan_chunks_with_heuristics(chunks)
-        ordered_findings.extend(
-            _normalize_finding(finding=finding, repo_root=repo_path) for finding in fallback_report.findings
-        )
 
     stats.findings_before_dedup = len(ordered_findings)
     deduped_findings = _dedupe_findings(ordered_findings)
