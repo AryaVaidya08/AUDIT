@@ -341,19 +341,14 @@ OUTPUT
       Stream per-chunk progress messages to stderr (default: on).
 
 EXAMPLES
-  # Scan current directory, write report to report.json
   audit .
 
-  # Scan a specific repo, save report elsewhere
   audit /path/to/repo --out /tmp/my-report.json
 
-  # Fail CI if any high or critical findings are found
   audit . --fail-on high
 
-  # Resume an interrupted scan with caching enabled
   audit . --resume --cache
 
-  # Disable progress output and limit concurrency
   audit . --no-progress --max-inflight-llm-calls 2
 """
 
