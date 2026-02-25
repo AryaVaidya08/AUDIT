@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
 from typing import Any
 
 from app.config import settings
@@ -38,7 +39,10 @@ from app.scan.schema import (
 from app.vectorstore.chroma_store import ChromaCollections, ChromaStore
 
 logger = logging.getLogger("audit.scan")
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    PROJECT_ROOT = Path(getattr(sys, "_MEIPASS")).resolve()
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MAX_REPORTED_ERRORS = 250
 _SEVERITY_VALUES = {"low", "medium", "high", "critical"}
 _CHUNKING_STRATEGY = "fixed_lines_no_overlap"

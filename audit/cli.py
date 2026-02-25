@@ -10,8 +10,11 @@ from typing import Any
 import click
 import typer
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-BACKEND_DIR = REPO_ROOT / "backend"
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    BACKEND_DIR = Path(getattr(sys, "_MEIPASS")) / "backend"
+else:
+    REPO_ROOT = Path(__file__).resolve().parents[1]
+    BACKEND_DIR = REPO_ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
@@ -255,15 +258,16 @@ def scan(
 
 
 _HELP_TEXT = """\
-audit-code — local-first security scanner
+audit — local-first security scanner
 ==========================================
 
 USAGE
-  audit-code [PATH] [OPTIONS]
-  audit-code scan [PATH] [OPTIONS]
-  audit-code help
+  audit [PATH] [OPTIONS]
+  audit scan [PATH] [OPTIONS]
+  audit help
 
 PATH defaults to the current directory when omitted.
+`audit-code` is a supported legacy alias.
 
 COMMANDS
   scan      Scan a repository for security vulnerabilities (default command).
@@ -338,19 +342,19 @@ OUTPUT
 
 EXAMPLES
   # Scan current directory, write report to report.json
-  audit-code .
+  audit .
 
   # Scan a specific repo, save report elsewhere
-  audit-code /path/to/repo --out /tmp/my-report.json
+  audit /path/to/repo --out /tmp/my-report.json
 
   # Fail CI if any high or critical findings are found
-  audit-code . --fail-on high
+  audit . --fail-on high
 
   # Resume an interrupted scan with caching enabled
-  audit-code . --resume --cache
+  audit . --resume --cache
 
   # Disable progress output and limit concurrency
-  audit-code . --no-progress --max-inflight-llm-calls 2
+  audit . --no-progress --max-inflight-llm-calls 2
 """
 
 
@@ -362,8 +366,13 @@ def help_command() -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _normalize_args(sys.argv[1:] if argv is None else list(argv))
+    prog_name = "audit"
+    if argv is None:
+        detected_prog_name = Path(sys.argv[0]).name
+        if detected_prog_name:
+            prog_name = detected_prog_name
     try:
-        result = app(args=args, prog_name="audit-code", standalone_mode=False)
+        result = app(args=args, prog_name=prog_name, standalone_mode=False)
     except click.exceptions.Exit as exc:
         return int(exc.exit_code)
     except click.ClickException as exc:

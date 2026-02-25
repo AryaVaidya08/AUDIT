@@ -1,0 +1,63 @@
+name: npm Publish
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (vX.Y.Z)."
+        required: true
+        type: string
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish npm package
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Resolve tag and version
+        id: version
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            TAG="${{ inputs.tag }}"
+          fi
+
+          if [[ "$TAG" != v* ]]; then
+            echo "Tag must start with 'v'. Got: $TAG" >&2
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify npm package version matches tag
+        shell: bash
+        run: |
+          PKG_VERSION="$(node -p "require('./npm/package.json').version")"
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          if [[ "$PKG_VERSION" != "$TAG_VERSION" ]]; then
+            echo "npm/package.json version ($PKG_VERSION) does not match tag version ($TAG_VERSION)." >&2
+            exit 1
+          fi
+
+      - name: Publish to npm
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

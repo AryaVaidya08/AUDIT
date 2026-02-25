@@ -14,7 +14,14 @@ REQUIRES_DIST = (
     "pydantic>=2.6,<3",
     "typer>=0.12,<1",
 )
-ENTRYPOINT = "audit-code = audit.cli:entrypoint"
+ENTRYPOINTS = (
+    "audit = audit.cli:entrypoint",
+    "audit-code = audit.cli:entrypoint",
+)
+RUNTIME_ROOTS = (
+    "audit",
+    "backend/app",
+)
 
 
 def _repo_root() -> Path:
@@ -59,7 +66,7 @@ def _wheel_text() -> str:
 
 
 def _entry_points_text() -> str:
-    return "[console_scripts]\n" + ENTRYPOINT + "\n"
+    return "[console_scripts]\n" + "\n".join(ENTRYPOINTS) + "\n"
 
 
 def _record_row(path: str, payload: bytes) -> str:
@@ -78,14 +85,20 @@ def _write_metadata_tree(target_dir: Path) -> str:
     return dist_info.name
 
 
-def _iter_audit_package_files() -> list[tuple[str, bytes]]:
-    root = _repo_root() / "audit"
+def _iter_runtime_files() -> list[tuple[str, bytes]]:
+    repo_root = _repo_root()
     collected: list[tuple[str, bytes]] = []
-    for file_path in sorted(root.rglob("*")):
-        if not file_path.is_file():
+    for relative_root in RUNTIME_ROOTS:
+        root = repo_root / relative_root
+        if not root.exists():
             continue
-        relative = file_path.relative_to(_repo_root()).as_posix()
-        collected.append((relative, file_path.read_bytes()))
+        for file_path in sorted(root.rglob("*")):
+            if not file_path.is_file():
+                continue
+            if "__pycache__" in file_path.parts or file_path.suffix in {".pyc", ".pyo"}:
+                continue
+            relative = file_path.relative_to(repo_root).as_posix()
+            collected.append((relative, file_path.read_bytes()))
     return collected
 
 
@@ -105,7 +118,7 @@ def _build_wheel_impl(wheel_directory: str, editable: bool) -> str:
             repo_path = os.fspath(_repo_root())
             add_file(f"{_dist_name()}.pth", (repo_path + "\n").encode("utf-8"))
         else:
-            for path, payload in _iter_audit_package_files():
+            for path, payload in _iter_runtime_files():
                 add_file(path, payload)
 
         add_file(f"{dist_info}/METADATA", _metadata_text().encode("utf-8"))

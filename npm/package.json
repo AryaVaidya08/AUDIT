@@ -1,0 +1,32 @@
+{
+  "name": "audit-code",
+  "version": "0.1.0",
+  "description": "AUDIT CLI binaries with automatic platform download and verification.",
+  "license": "UNLICENSED",
+  "bin": {
+    "audit": "bin/audit.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "vendor",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AryaVaidya08/AUDIT"
+  },
+  "keywords": [
+    "security",
+    "audit",
+    "scanner",
+    "sast"
+  ]
+}

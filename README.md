@@ -2,9 +2,20 @@
 
 Local-first repository security scanner with LLM-powered analysis, cache/resume support, and JSON reporting.
 
-## Quickstart
+## Install
 
-Use these exact commands from a fresh clone:
+### npm global install (no Python required)
+
+```bash
+npm i -g audit-code
+audit --help
+export OPENAI_API_KEY="your-key"
+audit . --out report.json
+```
+
+The npm package downloads the correct prebuilt binary for your platform during `postinstall` and verifies `sha256` checksums before running it.
+
+### Source install (for development)
 
 ```bash
 cd /path/to/AUDIT
@@ -13,21 +24,21 @@ source .venv/bin/activate
 python -m pip install -e .
 python -m pip install openai
 export OPENAI_API_KEY="your-key"
-audit-code demo_vuln_repo --out report.json
+audit demo_vuln_repo --out report.json
 ```
 
-Keep the virtual environment activated so `audit-code` resolves to the local editable install and not the macOS system `audit` binary.
-`python -m audit ...` is equivalent to `audit-code ...`.
+Keep the virtual environment activated so `audit` resolves to the local editable install and not the macOS system `audit` binary.
+If your shell still resolves another `audit` binary, use `audit-code ...` (legacy alias) or `python -m audit ...`.
 
 ### Runtime requirements
 
-- `openai` must be installed and `OPENAI_API_KEY` must be set, otherwise scans exit with code `2`.
+- `OPENAI_API_KEY` must be set for scan commands, otherwise scans exit with code `2`.
 - `chromadb` is optional. If Chroma/KB indexing fails, AUDIT falls back to a simpler KB retrieval path.
-- `.env` and `.env.local` at the repo root are auto-loaded by the backend config module.
+- `.env` and `.env.local` at the repo root are auto-loaded by the backend config module for source runs.
 
 ## What you should see
 
-`audit-code` writes a full JSON report to the path given by `--out` (default: `report.json` in the current directory) and prints a readable summary to stdout.
+`audit` writes a full JSON report to the path given by `--out` (default: `report.json` in the current directory) and prints a readable summary to stdout.
 
 Example summary shape:
 
@@ -46,9 +57,10 @@ Finding counts and individual findings depend on model responses, thresholds, an
 
 | Command | Description |
 |---|---|
-| `audit-code [PATH]` | Scan a repository (default command, PATH defaults to `.`) |
-| `audit-code scan [PATH]` | Explicit form of the scan command |
-| `audit-code help` | Print full usage reference |
+| `audit [PATH]` | Scan a repository (default command, PATH defaults to `.`) |
+| `audit scan [PATH]` | Explicit form of the scan command |
+| `audit help` | Print full usage reference |
+| `audit-code ...` | Legacy alias for `audit ...` |
 
 ### Core options
 
@@ -116,22 +128,22 @@ AUDIT can cache chunk-level results so repeated scans of unchanged code run fast
 
 ```bash
 # Scan current directory, write report to report.json
-audit-code .
+audit .
 
 # Scan a specific repo, save report to a custom path
-audit-code /path/to/repo --out /tmp/my-report.json
+audit /path/to/repo --out /tmp/my-report.json
 
 # Fail CI if any high or critical findings are found
-audit-code . --fail-on high
+audit . --fail-on high
 
 # Resume an interrupted scan with caching enabled
-audit-code . --resume --cache
+audit . --resume --cache
 
 # Disable progress output and limit concurrency
-audit-code . --no-progress --max-inflight-llm-calls 2
+audit . --no-progress --max-inflight-llm-calls 2
 
 # Print full usage reference
-audit-code help
+audit help
 ```
 
 ## CI example
@@ -140,7 +152,32 @@ audit-code help
 python -m pip install -e .
 python -m pip install openai
 export OPENAI_API_KEY="your-key"
-audit-code . --out report.json --fail-on high
+audit . --out report.json --fail-on high
 ```
 
 This keeps CI green for low/medium-only findings and fails when high/critical findings are present.
+
+## Release artifacts
+
+Each release tag `vX.Y.Z` publishes these binary assets:
+
+- `audit-darwin-arm64`
+- `audit-darwin-x64`
+- `audit-linux-x64`
+- `audit-windows-x64.exe`
+- `audit-checksums.txt`
+
+The npm wrapper fetches assets from:
+
+`https://github.com/<owner>/<repo>/releases/download/vX.Y.Z/`
+
+Override this with `AUDIT_BINARY_BASE_URL` when testing mirrors.
+
+## Manual release validation
+
+```bash
+npm i -g audit-code@<version>
+audit --help
+export OPENAI_API_KEY=...
+audit . --out report.json
+```

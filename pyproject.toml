@@ -15,4 +15,5 @@ dependencies = [
 ]
 
 [project.scripts]
+audit = "audit.cli:entrypoint"
 audit-code = "audit.cli:entrypoint"

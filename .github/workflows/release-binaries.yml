@@ -1,0 +1,133 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (vX.Y.Z). Leave empty for build-only dry runs."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: darwin
+            arch: arm64
+          - runner: macos-13
+            platform: darwin
+            arch: x64
+          - runner: ubuntu-22.04
+            platform: linux
+            arch: x64
+          - runner: windows-2022
+            platform: windows
+            arch: x64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller openai
+          python -m pip install .
+
+      - name: Build binary
+        run: python tools/build_binary.py --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" --clean
+
+      - name: Package release asset
+        run: python tools/package_release_assets.py --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}"
+
+      - name: Smoke check --help
+        run: |
+          python -c "import os, pathlib, subprocess, sys; root = pathlib.Path.cwd(); binary = root / 'dist' / ('audit.exe' if os.name == 'nt' else 'audit'); result = subprocess.run([str(binary), '--help']); sys.exit(result.returncode)"
+
+      - name: Smoke check missing OPENAI_API_KEY
+        run: |
+          python -c "import os, pathlib, subprocess, sys, tempfile; root = pathlib.Path.cwd(); binary = root / 'dist' / ('audit.exe' if os.name == 'nt' else 'audit'); env = os.environ.copy(); env.pop('OPENAI_API_KEY', None); out_path = pathlib.Path(tempfile.gettempdir()) / 'audit-missing-key-report.json'; proc = subprocess.run([str(binary), 'demo_vuln_repo', '--out', str(out_path), '--no-progress'], capture_output=True, text=True, env=env); ok = proc.returncode == 2 and 'OPENAI_API_KEY' in (proc.stderr + proc.stdout); sys.exit(0 if ok else 1)"
+
+      - name: Smoke check scan writes report
+        if: ${{ secrets.OPENAI_API_KEY != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -c "import os, pathlib, subprocess, sys, tempfile; root = pathlib.Path.cwd(); binary = root / 'dist' / ('audit.exe' if os.name == 'nt' else 'audit'); out_path = pathlib.Path(tempfile.gettempdir()) / 'audit-smoke-report.json'; proc = subprocess.run([str(binary), 'demo_vuln_repo', '--max-chunks', '1', '--out', str(out_path), '--no-progress'], env=os.environ.copy()); sys.exit(0 if proc.returncode == 0 and out_path.exists() else 1)"
+
+      - name: Upload per-platform artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/*
+          if-no-files-found: error
+
+  publish-release-assets:
+    name: Publish GitHub Release Assets
+    needs: build
+    runs-on: ubuntu-22.04
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: resolve-tag
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && -n "${{ inputs.tag }}" ]]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          if [[ -z "$TAG" || "$TAG" != v* ]]; then
+            echo "Expected a v* tag, got '$TAG'" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download matrix artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: artifact-downloads
+
+      - name: Gather binaries into release directory
+        shell: bash
+        run: |
+          mkdir -p release
+          find artifact-downloads -type f \( \
+            -name "audit-darwin-arm64" -o \
+            -name "audit-darwin-x64" -o \
+            -name "audit-linux-x64" -o \
+            -name "audit-windows-x64.exe" \
+          \) -exec cp {} release/ \;
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Regenerate consolidated checksums
+        run: python tools/package_release_assets.py --release-dir release
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.resolve-tag.outputs.tag }}
+          files: release/*
+          fail_on_unmatched_files: true
