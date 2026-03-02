@@ -258,7 +258,7 @@ def scan(
 
 
 _HELP_TEXT = """\
-audit — local-first security scanner
+audit - local-first security scanner
 ==========================================
 
 USAGE
@@ -291,7 +291,7 @@ SCAN TUNING
   --top-k INT (min 1)
       Number of knowledge-base documents retrieved per code chunk.
 
-  --threshold FLOAT (0.0 – 1.0)
+  --threshold FLOAT (0.0 - 1.0)
       Minimum similarity score for a KB doc to be used.
 
   --max-chunks INT (min 1)
@@ -307,7 +307,7 @@ SCAN TUNING
       How many times to retry malformed LLM JSON responses.
 
 PREFILTER OPTIONS
-  --prefilter-min-score FLOAT (0.0 – 1.0)
+  --prefilter-min-score FLOAT (0.0 - 1.0)
       Discard chunks whose heuristic pre-filter score is below this value.
 
   --prefilter-max-candidates INT (min 1)
@@ -323,8 +323,8 @@ CACHING
 
   --cache-scope user | repo
       Where the default cache file is stored when --cache-path is not set.
-        user  — shared across all repos (default)
-        repo  — stored inside the scanned repo at .audit/scan_cache.sqlite3
+        user - shared across all repos (default)
+        repo - stored inside the scanned repo at .audit/scan_cache.sqlite3
 
   --cache-path PATH
       Explicit path to the SQLite cache file.
