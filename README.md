@@ -8,21 +8,21 @@
 
 ## Why AUDIT?
 
-AUDIT combines LLM-powered analysis with a curated 49-pattern knowledge base to find real vulnerabilities in your code - not just lint warnings. It runs locally, caches results incrementally so rescans are fast, and produces machine-readable JSON reports that slot straight into CI pipelines. When the LLM is unavailable, a heuristic prefilter still catches the obvious issues.
+AUDIT combines LLM-powered analysis with a curated 49-pattern knowledge base to find real vulnerabilities in your code (not just lint warnings). It runs locally, caches results incrementally so rescans are fast, and produces machine-readable JSON reports that slot straight into CI pipelines. When the LLM is unavailable, a heuristic prefilter still catches the obvious issues.
 
 ## Feature Highlights
 
-- **AI-powered analysis** - each code chunk is evaluated by an LLM with retrieval-augmented context from the knowledge base
-- **49-pattern knowledge base** - covers 12 vulnerability categories mapped to CWE and OWASP Top 10
-- **Heuristic prefilter** - scores chunks before LLM calls to skip irrelevant code and cut costs
-- **Incremental caching** - SQLite cache keyed on content hash; unchanged code is never re-scanned
-- **Resume / checkpoint** - interrupted scans pick up where they left off
-- **Cross-platform** - prebuilt binaries for macOS (ARM + x64), Linux x64, and Windows x64
-- **CI-ready** - `--fail-on` exit codes, JSON output, and `--no-progress` for clean logs
+- **AI-powered analysis**: each code chunk is evaluated by an LLM with retrieval-augmented context from the knowledge base
+- **49-pattern knowledge base**: covers 12 vulnerability categories mapped to CWE and OWASP Top 10
+- **Heuristic prefilter**: scores chunks before LLM calls to skip irrelevant code and cut costs
+- **Incremental caching**: SQLite cache keyed on content hash; unchanged code is never re-scanned
+- **Resume/checkpoint**: interrupted scans pick up where they left off
+- **Cross-platform**: prebuilt binaries for macOS (ARM + x64), Linux x64, and Windows x64
+- **CI-ready**: `--fail-on` exit codes, JSON output, and `--no-progress` for clean logs
 
 ## What It Detects
 
-AUDIT's knowledge base covers 12 vulnerability categories:
+AUDIT’s knowledge base covers 12 vulnerability categories:
 
 | # | Category | Patterns |
 |---|----------|----------|
