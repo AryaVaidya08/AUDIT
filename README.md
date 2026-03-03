@@ -17,6 +17,7 @@ AUDIT combines LLM-powered analysis with a curated 49-pattern knowledge base to 
 - **Heuristic prefilter**: scores chunks before LLM calls to skip irrelevant code and cut costs
 - **Incremental caching**: SQLite cache keyed on content hash; unchanged code is never re-scanned
 - **Resume/checkpoint**: interrupted scans pick up where they left off
+- **Resilient**: rate-limit retries with exponential backoff; transient connectivity failures are warnings, not hard errors
 - **Cross-platform**: prebuilt binaries for macOS (ARM + x64), Linux x64, and Windows x64
 - **CI-ready**: `--fail-on` exit codes, JSON output, and `--no-progress` for clean logs
 
@@ -81,19 +82,31 @@ The npm package downloads the correct prebuilt binary for your platform during `
 cd /path/to/AUDIT
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
-python -m pip install openai
+python -m pip install -e ".[llm,vectorstore]"
 export OPENAI_API_KEY="your-key"
 audit demo_vuln_repo --out report.json
 ```
 
+The `llm` extra installs `openai` and the `vectorstore` extra installs `chromadb`.
+You can also install them individually (e.g. `pip install -e ".[llm]"`) — see [Optional dependency groups](#optional-dependency-groups) below.
+
 Keep the virtual environment activated so `audit` resolves to the local editable install and not the macOS system `audit` binary.
 If your shell still resolves another `audit` binary, use `audit-code ...` (legacy alias) or `python -m audit ...`.
+
+### Optional dependency groups
+
+| Group | Package | Purpose |
+|---|---|---|
+| `llm` | `openai>=1.0,<2` | Required for LLM-powered analysis |
+| `vectorstore` | `chromadb>=0.4,<1` | Enables vector similarity KB retrieval |
+
+Install one or both: `pip install -e ".[llm]"` or `pip install -e ".[llm,vectorstore]"`.
 
 ### Runtime requirements
 
 - `OPENAI_API_KEY` must be set for scan commands, otherwise scans exit with code `2`.
-- `chromadb` is optional. If Chroma/KB indexing fails, AUDIT falls back to a simpler KB retrieval path.
+- If API key connectivity validation fails at startup (e.g. transient network issue), the scan continues with a warning — per-chunk error handling deals with retries.
+- `chromadb` is optional. If Chroma/KB indexing fails, AUDIT falls back to a simpler token-overlap KB retrieval path.
 - `.env` and `.env.local` at the repo root are auto-loaded by the backend config module for source runs.
 
 ## CLI Reference
@@ -209,13 +222,35 @@ audit help
 ## CI example
 
 ```bash
-python -m pip install -e .
-python -m pip install openai
+python -m pip install -e ".[llm,vectorstore]"
 export OPENAI_API_KEY="your-key"
 audit . --out report.json --fail-on high
 ```
 
 This keeps CI green for low/medium-only findings and fails when high/critical findings are present.
+
+## Environment variables
+
+All scan-tuning flags can also be set via environment variables. The most commonly used:
+
+| Variable | Description | Default |
+|---|---|---|
+| `OPENAI_API_KEY` | OpenAI API key (required for scans) | — |
+| `SCAN_MODEL` | LLM model name | `gpt-4.1-mini` |
+| `SCAN_TOP_K` | KB documents retrieved per chunk | `5` |
+| `SCAN_SIMILARITY_THRESHOLD` | Minimum KB similarity score | `0.2` |
+| `SCAN_MAX_CHUNKS` | Max chunks to analyse (`0` = unlimited) | `300` |
+| `SCAN_REPAIR_RETRIES` | LLM JSON repair retries | `1` |
+| `SCAN_LLM_TIMEOUT_SECONDS` | Per-call LLM timeout | `20.0` |
+| `SCAN_CACHE_ENABLED` | Enable SQLite result cache | `true` |
+| `SCAN_CACHE_PATH` | Path to SQLite cache file | `~/Library/Caches/audit/scan_cache.sqlite3` (macOS) |
+| `SCAN_MAX_INFLIGHT_LLM_CALLS` | Max concurrent LLM requests | `4` |
+| `SCAN_PREFILTER_ENABLED` | Enable heuristic prefilter | `true` |
+| `SCAN_PREFILTER_MIN_SCORE` | Minimum prefilter score | `0.2` |
+| `SCAN_PREFILTER_MAX_CANDIDATES` | Max candidates after prefilter | `200` |
+| `CHUNK_SIZE_LINES` | Lines per code chunk | `120` |
+| `KB_SCORE_THRESHOLD` | Minimum KB retrieval score for results | `0.2` |
+| `AUDIT_ALLOWED_SCAN_ROOT` | (API server only) Restrict `/scan` and `/index` to paths under this root | current working directory |
 
 ## Release artifacts
 
