@@ -25,7 +25,7 @@ jobs:
           - runner: macos-14
             platform: darwin
             arch: arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             platform: darwin
             arch: x64
           - runner: ubuntu-22.04
