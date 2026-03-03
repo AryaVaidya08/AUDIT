@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 from collections.abc import Iterable
 
@@ -19,11 +20,14 @@ def _fallback_embedding(text: str, dimensions: int = 1536) -> list[float]:
     digest = hashlib.sha256(text.encode("utf-8")).digest()
     values = [((byte / 255.0) * 2.0) - 1.0 for byte in digest]
     if dimensions <= len(values):
-        return values[:dimensions]
-    expanded = values.copy()
-    while len(expanded) < dimensions:
-        expanded.extend(values)
-    return expanded[:dimensions]
+        raw = values[:dimensions]
+    else:
+        expanded = values.copy()
+        while len(expanded) < dimensions:
+            expanded.extend(values)
+        raw = expanded[:dimensions]
+    norm = math.sqrt(sum(v * v for v in raw)) or 1.0
+    return [v / norm for v in raw]
 
 
 class TextEmbedder:

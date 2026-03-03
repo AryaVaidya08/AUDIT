@@ -48,11 +48,13 @@ def iter_repo_files(
     normalized_excluded_dirs = {value.lower() for value in exclude_dirs}
     emitted = 0
 
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames[:] = [d for d in dirnames if d.lower() not in normalized_excluded_dirs]
 
         for name in filenames:
             file_path = Path(dirpath) / name
+            if file_path.is_symlink():
+                continue
             if not _is_included(
                 path=file_path,
                 root=root,

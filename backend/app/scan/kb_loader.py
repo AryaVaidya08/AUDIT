@@ -6,6 +6,7 @@ from app.scan.schema import KBDocument
 
 _REQUIRED_FIELDS = ("id", "title", "tags", "severity_guidance")
 _LIST_FIELDS = ("tags", "exploit_classes", "languages")
+_MAX_KB_FILE_BYTES = 1_000_000
 
 
 def _parse_list_field(raw: str) -> list[str]:
@@ -13,6 +14,9 @@ def _parse_list_field(raw: str) -> list[str]:
 
 
 def _parse_kb_markdown(path: Path) -> KBDocument:
+    file_size = path.stat().st_size
+    if file_size > _MAX_KB_FILE_BYTES:
+        raise ValueError(f"KB file exceeds {_MAX_KB_FILE_BYTES} bytes ({file_size}): {path}")
     raw = path.read_text(encoding="utf-8")
     lines = raw.splitlines()
 
@@ -65,6 +69,8 @@ def load_kb_documents(kb_dir: Path) -> list[KBDocument]:
 
     docs: list[KBDocument] = []
     for path in sorted(kb_dir.rglob("*.md")):
+        if path.is_symlink():
+            continue
         docs.append(_parse_kb_markdown(path))
 
     ids = [doc.id for doc in docs]

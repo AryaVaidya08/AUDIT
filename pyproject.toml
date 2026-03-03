@@ -14,6 +14,10 @@ dependencies = [
     "typer>=0.12,<1",
 ]
 
+[project.optional-dependencies]
+llm = ["openai>=1.0,<2"]
+vectorstore = ["chromadb>=0.4,<1"]
+
 [project.scripts]
 audit = "audit.cli:entrypoint"
 audit-code = "audit.cli:entrypoint"

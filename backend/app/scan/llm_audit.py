@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
 try:
     from openai import OpenAI
+    from openai import RateLimitError as _RateLimitError
 except ImportError:
     OpenAI = None
+    _RateLimitError = None
 
 from app.scan.prompts import build_audit_messages, build_repair_messages
 from app.scan.schema import CodeChunk, Finding, RetrievalHit
@@ -42,6 +45,35 @@ class ChunkAuditResult:
 def llm_is_available(api_key: str | None = None) -> bool:
     resolved_key = api_key if api_key is not None else os.getenv("OPENAI_API_KEY")
     return OpenAI is not None and bool(resolved_key)
+
+
+_validated_api_keys: set[str] = set()
+
+
+def validate_api_key(api_key: str | None = None) -> str | None:
+    """Validate the OpenAI API key format and connectivity.
+
+    Returns ``None`` on success or a warning message string on failure.
+    Only the missing-key / missing-package cases are fatal (raise
+    ``RuntimeError``) because those are configuration errors that can
+    never self-heal.  A transient network failure is returned as a
+    warning so the caller can log it and let per-chunk error handling
+    deal with the problem.
+    """
+    resolved_key = api_key if api_key is not None else os.getenv("OPENAI_API_KEY")
+    if not resolved_key:
+        raise RuntimeError("OPENAI_API_KEY is not set.")
+    if resolved_key in _validated_api_keys:
+        return None
+    client = _build_openai_client(api_key=resolved_key)
+    if client is None:
+        raise RuntimeError("Failed to build OpenAI client. Is the openai package installed?")
+    try:
+        client.models.list(timeout=10.0)
+    except Exception as exc:
+        return f"OpenAI API key validation failed (will retry per-chunk): {exc}"
+    _validated_api_keys.add(resolved_key)
+    return None
 
 
 def _extract_response_text(response: Any) -> str:
@@ -263,13 +295,26 @@ def audit_chunk_with_llm(
             system_prompt, user_prompt = build_repair_messages(raw_output=raw_output)
 
         try:
-            raw_output, call_prompt_tokens, call_completion_tokens, call_total_tokens = _chat(
-                llm_client,
-                model=model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                timeout_seconds=effective_timeout,
-            )
+            max_rate_limit_retries = 3
+            for rate_limit_attempt in range(max_rate_limit_retries + 1):
+                try:
+                    raw_output, call_prompt_tokens, call_completion_tokens, call_total_tokens = _chat(
+                        llm_client,
+                        model=model,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        timeout_seconds=effective_timeout,
+                    )
+                    break
+                except Exception as rate_exc:
+                    if (
+                        _RateLimitError is not None
+                        and isinstance(rate_exc, _RateLimitError)
+                        and rate_limit_attempt < max_rate_limit_retries
+                    ):
+                        time.sleep(2 ** (rate_limit_attempt + 1))
+                        continue
+                    raise
             llm_calls += 1
             prompt_tokens += call_prompt_tokens
             completion_tokens += call_completion_tokens
@@ -284,8 +329,10 @@ def audit_chunk_with_llm(
                 completion_tokens=completion_tokens,
                 total_tokens=total_tokens,
             )
-        except Exception as exc:
+        except (json.JSONDecodeError, ValueError, KeyError) as exc:
             parse_failures += 1
+            last_error = f"parse_error: {exc}"
+        except Exception as exc:
             last_error = str(exc)
             continue
 

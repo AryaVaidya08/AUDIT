@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from app.vectorstore.chroma_store import ChromaCollections, ChromaStore
 app = FastAPI(title="AUDIT")
 logger = logging.getLogger("audit")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_ALLOWED_SCAN_ROOT: Path | None = None
 _SUSPICIOUS_QUERY_PATTERN = re.compile(
     r"(?i)(api[_-]?key|secret|token|password|AKIA[0-9A-Z]{16}|select|insert|update|delete|execute\(|query\()"
 )
@@ -29,13 +31,34 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/scan", response_model=ScanReport)
-def scan_local_repo(payload: ScanRequest) -> ScanReport:
-    repo_path = Path(payload.local_path).expanduser().resolve()
+def _get_allowed_scan_root() -> Path:
+    global _ALLOWED_SCAN_ROOT
+    if _ALLOWED_SCAN_ROOT is None:
+        raw = os.getenv("AUDIT_ALLOWED_SCAN_ROOT")
+        _ALLOWED_SCAN_ROOT = Path(raw).resolve() if raw else Path.cwd().resolve()
+    return _ALLOWED_SCAN_ROOT
+
+
+def _validate_scan_path(raw_path: str) -> Path:
+    """Resolve and validate that the scan path is under the allowed root."""
+    repo_path = Path(raw_path).expanduser().resolve()
+    try:
+        repo_path.relative_to(_get_allowed_scan_root())
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail="local_path is outside the allowed scan root",
+        )
     if not repo_path.exists():
         raise HTTPException(status_code=404, detail="local_path does not exist")
     if not repo_path.is_dir():
         raise HTTPException(status_code=400, detail="local_path must be a directory")
+    return repo_path
+
+
+@app.post("/scan", response_model=ScanReport)
+def scan_local_repo(payload: ScanRequest) -> ScanReport:
+    repo_path = _validate_scan_path(payload.local_path)
     try:
         return run_scan_repo(
             path=repo_path,
@@ -68,11 +91,7 @@ def _resolve_runtime_path(raw_path: str) -> Path:
 
 @app.post("/index", response_model=IndexReport)
 def index_local_repo(payload: IndexRequest) -> IndexReport:
-    repo_path = Path(payload.local_path).expanduser().resolve()
-    if not repo_path.exists():
-        raise HTTPException(status_code=404, detail="local_path does not exist")
-    if not repo_path.is_dir():
-        raise HTTPException(status_code=400, detail="local_path must be a directory")
+    repo_path = _validate_scan_path(payload.local_path)
 
     kb_dir = _resolve_from_project(settings.kb_dir)
     persist_dir = _resolve_runtime_path(settings.chroma_persist_dir)

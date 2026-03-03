@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 try:
@@ -12,7 +13,12 @@ from app.scan.schema import CodeChunk, KBDocument, RetrievalHit
 from app.utils.hash import code_chunk_id
 import os
 
-KB_SCORE_THRESHOLD = float(os.getenv("KB_SCORE_THRESHOLD", 0.2))
+logger = logging.getLogger("audit.vectorstore")
+
+try:
+    KB_SCORE_THRESHOLD = float(os.getenv("KB_SCORE_THRESHOLD", 0.2))
+except (TypeError, ValueError):
+    KB_SCORE_THRESHOLD = 0.2
 
 
 @dataclass(frozen=True)
@@ -45,6 +51,11 @@ class ChromaStore:
         except Exception as exc:
             if "dimension" not in str(exc).lower():
                 raise
+            logger.warning(
+                "Embedding dimension mismatch for collection '%s'. "
+                "Dropping and recreating the collection (existing data will be lost).",
+                collection_name,
+            )
             self._client.delete_collection(name=collection_name)
             collection = self._client.get_or_create_collection(name=collection_name)
             collection.upsert(ids=ids, documents=documents, metadatas=metadatas, embeddings=embeddings)

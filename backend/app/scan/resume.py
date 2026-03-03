@@ -94,7 +94,11 @@ def save_checkpoint(path: str | Path, checkpoint: ResumeCheckpoint) -> None:
     payload.update(checkpoint.extras)
     tmp_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
-    tmp_path.replace(checkpoint_path)
+    try:
+        tmp_path.replace(checkpoint_path)
+    except OSError:
+        import shutil
+        shutil.move(str(tmp_path), str(checkpoint_path))
 
 
 def clear_checkpoint(path: str | Path) -> None:

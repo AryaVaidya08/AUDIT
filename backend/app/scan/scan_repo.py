@@ -14,7 +14,7 @@ from app.ingest.repo_loader import collect_files
 from app.parse.chunkers import chunk_sources
 from app.scan.cache import CacheRecord, ScanCache, build_cache_key, compute_chunk_hash
 from app.scan.kb_loader import load_kb_documents
-from app.scan.llm_audit import ChunkAuditResult, audit_chunk_with_llm, llm_is_available
+from app.scan.llm_audit import ChunkAuditResult, audit_chunk_with_llm, llm_is_available, validate_api_key
 from app.scan.prefilter import select_candidates
 from app.scan.prompts import PROMPT_VERSION
 from app.scan.scanner import scan_chunks as heuristic_scan_chunks
@@ -275,39 +275,6 @@ def _snapshot_partial_findings(candidate_findings: dict[int, list[Finding]], upt
     return payload
 
 
-def _finalize_report(
-    *,
-    repo_path: Path,
-    scan_started_at: datetime,
-    stats: ScanStats,
-    findings: list[Finding],
-    errors: list[ScanChunkError],
-    model_name: str,
-    top_k: int,
-    threshold: float,
-    max_chunks: int | None,
-    chunk_size_lines: int,
-    repair_retries: int,
-    embedding_model: str,
-) -> ScanReport:
-    scan_finished_at = datetime.now(timezone.utc)
-    stats.duration_ms = int((scan_finished_at - scan_started_at).total_seconds() * 1000)
-    metadata = ScanMetadata(
-        repo_path=str(repo_path),
-        scan_started_at=scan_started_at,
-        scan_finished_at=scan_finished_at,
-        model=model_name,
-        chunking_strategy=_CHUNKING_STRATEGY,
-        embedding_model=embedding_model,
-        top_k=top_k,
-        similarity_threshold=threshold,
-        max_chunks=max_chunks,
-        chunk_size_lines=chunk_size_lines,
-        repair_retries=repair_retries,
-    )
-    return ScanReport(metadata=metadata, stats=stats, findings=findings, errors=errors)
-
-
 def scan_repo(
     path: str | Path,
     top_k: int | None = None,
@@ -394,6 +361,10 @@ def scan_repo(
             "LLM is not available: the openai package is not installed or OPENAI_API_KEY is not set. "
             "Install openai and set your API key to use this tool."
         )
+    validation_warning = validate_api_key()
+    if validation_warning:
+        logger.warning(validation_warning)
+        _emit_progress(progress_callback, f"[scan] warning: {validation_warning}")
 
     kb_dir = _resolve_from_project(settings.kb_dir)
     persist_dir = _resolve_runtime_path(settings.chroma_persist_dir)
@@ -822,7 +793,8 @@ def scan_repo(
     )
 
     scan_finished_at = datetime.now(timezone.utc)
-    stats.duration_ms = int((scan_finished_at - scan_started_at).total_seconds() * 1000)
+    current_session_ms = int((scan_finished_at - scan_started_at).total_seconds() * 1000)
+    stats.duration_ms = stats.duration_ms + current_session_ms if stats.resume_used else current_session_ms
     metadata = ScanMetadata(
         repo_path=str(repo_path),
         scan_started_at=scan_started_at,
@@ -838,17 +810,7 @@ def scan_repo(
     )
 
     if effective_resume:
-        completion_checkpoint = ResumeCheckpoint(
-            run_signature=run_signature,
-            repo_path=str(repo_path),
-            scan_params_signature=scan_params_signature,
-            candidate_index_hash=candidate_index_hash,
-            next_candidate_offset=total_candidates,
-            partial_stats=stats.model_dump(),
-            extras={"completed": True},
-        )
         try:
-            save_checkpoint(effective_checkpoint_path, completion_checkpoint)
             effective_checkpoint_path.unlink(missing_ok=True)
         except Exception as exc:
             _emit_progress(progress_callback, f"[scan] checkpoint cleanup failed: {exc}")

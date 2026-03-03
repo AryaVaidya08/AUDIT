@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.scan.llm_audit import ChunkAuditResult
 from app.scan.schema import CodeChunk, Finding, KBDocument, RetrievalHit
 from app.scan import scan_repo as scan_repo_module
@@ -80,6 +82,7 @@ def _patch_scan_dependencies(monkeypatch: object, store_class: type[object], rep
     )
     monkeypatch.setattr(scan_repo_module, "TextEmbedder", _FakeEmbedder)
     monkeypatch.setattr(scan_repo_module, "ChromaStore", store_class)
+    monkeypatch.setattr(scan_repo_module, "validate_api_key", lambda: None)  # returns None = success
 
 
 def test_scan_repo_retries_then_skips_parse_error_and_dedups(monkeypatch: object, tmp_path: Path) -> None:
@@ -342,3 +345,78 @@ def test_scan_repo_adds_secret_heuristic_findings_when_llm_misses(monkeypatch: o
     assert secret_findings[0].end_line == 1
     assert "API_KEY" in secret_findings[0].code_content
     assert len(secret_findings[0].kb_evidence) == 1
+
+
+def test_scan_repo_continues_when_api_key_validation_has_connectivity_failure(monkeypatch: object, tmp_path: Path) -> None:
+    """P1 regression: a transient connectivity failure during validate_api_key must not abort the scan."""
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+
+    monkeypatch.setattr(scan_repo_module, "collect_files", lambda root: [{"path": "src/a.py", "text": "x"}])
+    monkeypatch.setattr(scan_repo_module, "chunk_sources", lambda sources, chunk_size_lines: _sample_chunks())
+    monkeypatch.setattr(
+        scan_repo_module,
+        "load_kb_documents",
+        lambda kb_dir: [KBDocument(id="cwe-89", title="SQLi", tags=["sqli"], severity_guidance="high", content="x")],
+    )
+    monkeypatch.setattr(scan_repo_module, "TextEmbedder", _FakeEmbedder)
+    monkeypatch.setattr(scan_repo_module, "ChromaStore", _HighScoreStore)
+
+    # simulate connectivity failure: validate_api_key returns a warning string
+    monkeypatch.setattr(scan_repo_module, "validate_api_key", lambda: "Connection error (simulated)")
+
+    def _fake_audit(
+        chunk: CodeChunk,
+        kb_hits: list[RetrievalHit],
+        model: str,
+        repair_retries: int,
+        timeout_seconds: float | None = None,
+    ) -> ChunkAuditResult:
+        _ = (kb_hits, model, repair_retries, timeout_seconds)
+        finding = _sample_finding(repo_dir, chunk.file_path, start_line=10)
+        return ChunkAuditResult(findings=[finding], llm_calls=1, llm_retries=0, parse_failures=0)
+
+    monkeypatch.setattr(scan_repo_module, "audit_chunk_with_llm", _fake_audit)
+
+    progress_messages: list[str] = []
+    report = scan_repo_module.scan_repo(
+        path=repo_dir,
+        threshold=0.2,
+        max_chunks=10,
+        model="gpt-4.1-mini",
+        cache_enabled=False,
+        progress_callback=progress_messages.append,
+    )
+
+    # scan completed despite validation warning
+    assert report.stats.findings_after_dedup >= 1
+    assert any("warning" in msg for msg in progress_messages)
+
+
+def test_scan_repo_raises_when_api_key_is_missing(monkeypatch: object, tmp_path: Path) -> None:
+    """Missing key is a config error that must remain fatal."""
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+
+    monkeypatch.setattr(scan_repo_module, "collect_files", lambda root: [{"path": "src/a.py", "text": "x"}])
+    monkeypatch.setattr(scan_repo_module, "chunk_sources", lambda sources, chunk_size_lines: _sample_chunks())
+    monkeypatch.setattr(
+        scan_repo_module,
+        "load_kb_documents",
+        lambda kb_dir: [KBDocument(id="cwe-89", title="SQLi", tags=["sqli"], severity_guidance="high", content="x")],
+    )
+    monkeypatch.setattr(scan_repo_module, "TextEmbedder", _FakeEmbedder)
+    monkeypatch.setattr(scan_repo_module, "ChromaStore", _HighScoreStore)
+
+    # validate_api_key raises RuntimeError for missing key — do NOT mock it away
+    monkeypatch.setattr(scan_repo_module, "llm_is_available", lambda: True)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY is not set"):
+        scan_repo_module.scan_repo(
+            path=repo_dir,
+            threshold=0.2,
+            max_chunks=10,
+            model="gpt-4.1-mini",
+            cache_enabled=False,
+        )

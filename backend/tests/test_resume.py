@@ -56,6 +56,7 @@ def _patch_common(monkeypatch: object) -> None:
     monkeypatch.setattr(scan_repo_module, "compute_candidate_index_hash", lambda indices: "candidate-hash")
     monkeypatch.setattr(scan_repo_module, "compute_run_signature", lambda repo_path, scan_params_signature, candidate_index_hash: "run-signature")
     monkeypatch.setattr(scan_repo_module, "save_checkpoint", lambda path, checkpoint: None)
+    monkeypatch.setattr(scan_repo_module, "validate_api_key", lambda: None)  # returns None = success
 
 
 def test_resume_mismatch_falls_back_to_fresh_scan(monkeypatch: object, tmp_path: Path) -> None:
