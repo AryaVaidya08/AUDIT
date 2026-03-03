@@ -2,10 +2,6 @@
 
 **Local-first security scanner for source code repositories.**
 
-[![npm](https://img.shields.io/npm/v/audit-code)](https://www.npmjs.com/package/audit-code)
-[![license](https://img.shields.io/github/license/anthropics/audit)](LICENSE)
-[![build](https://img.shields.io/github/actions/workflow/status/anthropics/audit/ci.yml)](../../actions)
-
 ## Why AUDIT?
 
 AUDIT combines LLM-powered analysis with a curated 49-pattern knowledge base to find real vulnerabilities in your code (not just lint warnings). It runs locally, caches results incrementally so rescans are fast, and produces machine-readable JSON reports that slot straight into CI pipelines. When the LLM is unavailable, a heuristic prefilter still catches the obvious issues.
