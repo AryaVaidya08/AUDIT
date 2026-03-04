@@ -77,6 +77,7 @@ class ScanStats(StrictModel):
     chunks_skipped_exception: int = Field(default=0, ge=0)
     findings_before_dedup: int = Field(default=0, ge=0)
     findings_after_dedup: int = Field(default=0, ge=0)
+    chunks_truncated: int = Field(default=0, ge=0)
     duration_ms: int = Field(default=0, ge=0)
     resume_used: bool = False
 
@@ -93,6 +94,7 @@ class ScanMetadata(StrictModel):
     similarity_threshold: float = Field(ge=0.0, le=1.0)
     max_chunks: int | None = Field(default=None, ge=1)
     chunk_size_lines: int = Field(ge=1)
+    chunk_overlap_lines: int = Field(default=0, ge=0)
     repair_retries: int = Field(default=1, ge=0)
 
 

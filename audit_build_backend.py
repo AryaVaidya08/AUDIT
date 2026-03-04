@@ -7,12 +7,16 @@ from pathlib import Path
 import zipfile
 
 PROJECT_NAME = "audit-local-scanner"
-PROJECT_VERSION = "0.1.0"
+PROJECT_VERSION = "0.1.1"
 SUMMARY = "Local-first security scanning CLI with deterministic fallback heuristics."
 REQUIRES_PYTHON = ">=3.10"
 REQUIRES_DIST = (
     "pydantic>=2.6,<3",
     "typer>=0.12,<1",
+)
+OPTIONAL_REQUIRES = (
+    ("llm", ("openai>=1.0,<2",)),
+    ("vectorstore", ("chromadb>=0.4,<1",)),
 )
 ENTRYPOINTS = (
     "audit = audit.cli:entrypoint",
@@ -50,6 +54,10 @@ def _metadata_text() -> str:
     ]
     for requirement in REQUIRES_DIST:
         lines.append(f"Requires-Dist: {requirement}")
+    for extra_name, extra_requirements in OPTIONAL_REQUIRES:
+        lines.append(f"Provides-Extra: {extra_name}")
+        for requirement in extra_requirements:
+            lines.append(f'Requires-Dist: {requirement}; extra == "{extra_name}"')
     return "\n".join(lines) + "\n"
 
 

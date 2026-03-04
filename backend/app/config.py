@@ -107,6 +107,7 @@ def _parse_bool(raw: str | None, fallback: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     chunk_size_lines: int
+    chunk_overlap_lines: int
     max_files: int
     max_file_size_bytes: int
     include_extensions: tuple[str, ...]
@@ -141,6 +142,7 @@ class Settings:
         default_cache_dir = _default_user_cache_dir()
         return cls(
             chunk_size_lines=_parse_int(os.getenv("CHUNK_SIZE_LINES"), 120),
+            chunk_overlap_lines=_parse_int(os.getenv("CHUNK_OVERLAP_LINES"), 0),
             max_files=_parse_int(os.getenv("MAX_FILES"), 5000),
             max_file_size_bytes=_parse_int(os.getenv("MAX_FILE_SIZE_BYTES"), 1_000_000),
             include_extensions=_parse_csv(

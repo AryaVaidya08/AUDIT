@@ -126,6 +126,7 @@ def _scan_command(
     checkpoint_path: str | None,
     model: str | None,
     chunk_size_lines: int | None,
+    chunk_overlap_lines: int | None,
     progress: bool,
 ) -> int:
     progress_callback = None
@@ -154,6 +155,7 @@ def _scan_command(
             checkpoint_path=checkpoint_path,
             model=model,
             chunk_size_lines=chunk_size_lines,
+            chunk_overlap_lines=chunk_overlap_lines,
             progress_callback=progress_callback,
         )
     except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
@@ -229,6 +231,7 @@ def scan(
     checkpoint_path: str | None = typer.Option(None, "--checkpoint-path", help="Path to resume checkpoint JSON."),
     model: str | None = typer.Option(None, "--model", help="LLM model name."),
     chunk_size_lines: int | None = typer.Option(None, "--chunk-size-lines", min=1, help="Chunk size in lines."),
+    chunk_overlap_lines: int | None = typer.Option(None, "--chunk-overlap-lines", min=0, help="Lines of overlap between consecutive chunks."),
     progress: bool = typer.Option(True, "--progress/--no-progress", help="Show per-chunk scan progress on stderr."),
 ) -> int:
     if cache_scope not in {"user", "repo"}:
@@ -253,6 +256,7 @@ def scan(
         checkpoint_path=checkpoint_path,
         model=model,
         chunk_size_lines=chunk_size_lines,
+        chunk_overlap_lines=chunk_overlap_lines,
         progress=progress,
     )
 
@@ -299,6 +303,10 @@ SCAN TUNING
 
   --chunk-size-lines INT (min 1)
       Lines of code per chunk sent to the LLM.
+
+  --chunk-overlap-lines INT (min 0)
+      Lines of overlap between consecutive chunks.
+      Helps avoid splitting vulnerabilities at chunk boundaries.
 
   --llm-timeout-seconds FLOAT (min 1.0)
       Per-call timeout for LLM requests.

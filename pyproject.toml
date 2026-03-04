@@ -5,7 +5,7 @@ backend-path = ["."]
 
 [project]
 name = "audit-local-scanner"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local-first security scanning CLI with deterministic fallback heuristics."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -132,6 +132,62 @@ class ChromaStore:
         self._code_chunks = self._client.get_collection(name=self._code_chunks.name)
         return len(chunks)
 
+    def query_security_kb_batch(
+        self,
+        query_embeddings: list[list[float]],
+        top_k: int = 5,
+        min_score: float | None = None,
+    ) -> list[list[RetrievalHit]]:
+        if not query_embeddings:
+            return []
+
+        threshold = KB_SCORE_THRESHOLD if min_score is None else min(max(min_score, 0.0), 1.0)
+        result = self._security_kb.query(
+            query_embeddings=query_embeddings,
+            n_results=max(1, top_k),
+            include=["metadatas", "documents", "distances"],
+        )
+
+        all_ids = result.get("ids") or []
+        all_metadatas = result.get("metadatas") or []
+        all_documents = result.get("documents") or []
+        all_distances = result.get("distances") or []
+
+        batch_hits: list[list[RetrievalHit]] = []
+        for query_index in range(len(query_embeddings)):
+            ids = all_ids[query_index] if query_index < len(all_ids) else []
+            metadatas = all_metadatas[query_index] if query_index < len(all_metadatas) else []
+            documents = all_documents[query_index] if query_index < len(all_documents) else []
+            distances = all_distances[query_index] if query_index < len(all_distances) else []
+
+            hits: list[RetrievalHit] = []
+            for index, doc_id in enumerate(ids):
+                metadata = metadatas[index] if index < len(metadatas) else {}
+                distance = float(distances[index]) if index < len(distances) else 1.0
+                raw_preview = documents[index] if index < len(documents) else ""
+                score = 1.0 / (1.0 + max(distance, 0.0))
+                if score < threshold:
+                    continue
+
+                meta = metadata if isinstance(metadata, dict) else {}
+                tags_value = meta.get("tags", "")
+                tags = [tag.strip() for tag in str(tags_value).split(",") if tag.strip()]
+                hits.append(
+                    RetrievalHit(
+                        id=str(doc_id),
+                        title=str(meta.get("title", doc_id)),
+                        score=score,
+                        severity_guidance=str(meta.get("severity_guidance", "medium")),
+                        tags=tags,
+                        domain=str(meta.get("domain", "")),
+                        cwe=str(meta.get("cwe", "")),
+                        owasp_2021=str(meta.get("owasp_2021", "")),
+                        preview=str(raw_preview)[:240],
+                    )
+                )
+            batch_hits.append(hits)
+        return batch_hits
+
     def query_security_kb(self, query_text: str, top_k: int = 5, min_score: float | None = None) -> list[RetrievalHit]:
         if not query_text.strip():
             return []

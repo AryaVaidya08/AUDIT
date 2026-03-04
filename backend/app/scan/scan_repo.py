@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -29,6 +30,7 @@ from app.scan.resume import (
 from app.scan.schema import (
     CodeChunk,
     Finding,
+    KBDocument,
     RetrievalHit,
     ScanChunkError,
     ScanMetadata,
@@ -45,10 +47,30 @@ else:
     PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MAX_REPORTED_ERRORS = 250
 _SEVERITY_VALUES = {"low", "medium", "high", "critical"}
-_CHUNKING_STRATEGY = "fixed_lines_no_overlap"
 _MODEL_TOKEN_PRICING_USD_PER_1M: dict[str, tuple[float, float]] = {
     "gpt-4.1-mini": (0.40, 1.60),
 }
+_HEURISTIC_BACKSTOP_RULE_PREFIXES = ("SECRET.",)
+_HEURISTIC_BACKSTOP_RULE_IDS = {"AUTH.MISSING_ADMIN_GUARD"}
+_FINDING_KB_DOC_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "AUTH.MISSING_ADMIN_GUARD": ("auth-missing-middleware",),
+    "SECRET.HARDCODED_ASSIGNMENT": ("cwe-798-hardcoded-creds",),
+    "SQL Injection": ("cwe-89-sql-injection",),
+    "SQLI.DYNAMIC_QUERY": ("cwe-89-sql-injection",),
+    "SQLI.EXECUTE_WITH_FSTRING": ("cwe-89-sql-injection",),
+    "CODE_EXEC.DYNAMIC_EVAL": ("expression-language-injection",),
+    "Unsafe Native Deserialization": ("unsafe-deserialization",),
+    "DESERIALIZE.UNSAFE_LOAD": ("unsafe-deserialization",),
+}
+_CWE_REFERENCE_TO_KB_DOC_ID: dict[str, str] = {
+    "cwe-89": "cwe-89-sql-injection",
+    "cwe-502": "unsafe-deserialization",
+    "cwe-798": "cwe-798-hardcoded-creds",
+    "cwe-306": "auth-missing-middleware",
+    "cwe-917": "expression-language-injection",
+}
+_EVAL_EXEC_PATTERN = re.compile(r"(?i)\b(eval|exec)\s*\(")
+_CWE_REFERENCE_PATTERN = re.compile(r"(?i)\bcwe[-:\s]?(\d{2,5})\b")
 
 
 def _resolve_from_project(raw_path: str | Path) -> Path:
@@ -93,6 +115,16 @@ def _normalize_finding(finding: Finding, repo_root: Path) -> Finding:
     if payload["end_line"] < payload["start_line"]:
         payload["end_line"] = payload["start_line"]
     return Finding.model_validate(payload)
+
+
+def _canonicalize_vuln_type(finding: Finding, chunk: CodeChunk) -> str:
+    raw_vuln_type = finding.vuln_type.strip()
+    normalized_vuln_type = raw_vuln_type.lower()
+    if normalized_vuln_type in {"expression language injection", "el injection", "cwe-917"}:
+        context = "\n".join([finding.evidence, chunk.text])
+        if _EVAL_EXEC_PATTERN.search(context):
+            return "CODE_EXEC.DYNAMIC_EVAL"
+    return raw_vuln_type
 
 
 def _dedupe_findings(findings: list[Finding]) -> list[Finding]:
@@ -141,10 +173,83 @@ def _extract_code_content(chunk: CodeChunk, finding: Finding, context_lines: int
     return snippet or finding.evidence
 
 
-def _enrich_finding(finding: Finding, *, chunk: CodeChunk, kb_hits: list[RetrievalHit]) -> Finding:
+def _doc_ids_from_finding_references(references: list[str]) -> list[str]:
+    doc_ids: list[str] = []
+    seen: set[str] = set()
+    for reference in references:
+        text = str(reference).strip()
+        if not text:
+            continue
+        for match in _CWE_REFERENCE_PATTERN.finditer(text):
+            normalized = f"cwe-{match.group(1)}".lower()
+            doc_id = _CWE_REFERENCE_TO_KB_DOC_ID.get(normalized)
+            if not doc_id or doc_id in seen:
+                continue
+            seen.add(doc_id)
+            doc_ids.append(doc_id)
+    return doc_ids
+
+
+def _kb_hits_for_doc_ids(
+    doc_ids: list[str],
+    kb_doc_hit_index: dict[str, RetrievalHit],
+) -> list[RetrievalHit]:
+    selected_hits: list[RetrievalHit] = []
+    for rank, doc_id in enumerate(doc_ids):
+        hit = kb_doc_hit_index.get(doc_id)
+        if hit is None:
+            continue
+        payload = hit.model_dump(mode="json")
+        payload["score"] = max(0.5, 1.0 - (rank * 0.01))
+        selected_hits.append(RetrievalHit.model_validate(payload))
+    return selected_hits
+
+
+def _select_kb_hits_for_finding(
+    *,
+    finding: Finding,
+    canonical_vuln_type: str,
+    chunk_kb_hits: list[RetrievalHit],
+    kb_doc_hit_index: dict[str, RetrievalHit],
+) -> list[RetrievalHit]:
+    explicit_doc_ids: list[str] = []
+    explicit_doc_ids.extend(_FINDING_KB_DOC_OVERRIDES.get(canonical_vuln_type, ()))
+    explicit_doc_ids.extend(_FINDING_KB_DOC_OVERRIDES.get(finding.vuln_type.strip(), ()))
+    explicit_doc_ids.extend(_doc_ids_from_finding_references(finding.references))
+
+    deduped_doc_ids: list[str] = []
+    seen_doc_ids: set[str] = set()
+    for doc_id in explicit_doc_ids:
+        if doc_id in seen_doc_ids:
+            continue
+        seen_doc_ids.add(doc_id)
+        deduped_doc_ids.append(doc_id)
+
+    targeted_hits = _kb_hits_for_doc_ids(deduped_doc_ids, kb_doc_hit_index=kb_doc_hit_index)
+    if targeted_hits:
+        return targeted_hits[:3]
+
+    return chunk_kb_hits[:3]
+
+
+def _enrich_finding(
+    finding: Finding,
+    *,
+    chunk: CodeChunk,
+    kb_hits: list[RetrievalHit],
+    kb_doc_hit_index: dict[str, RetrievalHit],
+) -> Finding:
+    canonical_vuln_type = _canonicalize_vuln_type(finding=finding, chunk=chunk)
+    selected_kb_hits = _select_kb_hits_for_finding(
+        finding=finding,
+        canonical_vuln_type=canonical_vuln_type,
+        chunk_kb_hits=kb_hits,
+        kb_doc_hit_index=kb_doc_hit_index,
+    )
     payload = finding.model_dump(mode="json")
+    payload["vuln_type"] = canonical_vuln_type
     payload["code_content"] = _extract_code_content(chunk=chunk, finding=finding)
-    payload["kb_evidence"] = [hit.model_dump(mode="json") for hit in kb_hits[:3]]
+    payload["kb_evidence"] = [hit.model_dump(mode="json") for hit in selected_kb_hits]
     return Finding.model_validate(payload)
 
 
@@ -157,21 +262,43 @@ def _find_chunk_for_finding(finding: Finding, chunks: list[CodeChunk]) -> tuple[
     return None
 
 
-def _collect_secret_heuristic_findings(
+def _build_kb_doc_hit_index(kb_docs: list[KBDocument]) -> dict[str, RetrievalHit]:
+    indexed_hits: dict[str, RetrievalHit] = {}
+    for doc in kb_docs:
+        indexed_hits[doc.id] = RetrievalHit(
+            id=doc.id,
+            title=doc.title,
+            score=1.0,
+            severity_guidance=doc.severity_guidance,
+            tags=doc.tags,
+            domain=doc.domain,
+            cwe=doc.cwe,
+            owasp_2021=doc.owasp_2021,
+            preview=doc.content[:240],
+        )
+    return indexed_hits
+
+
+def _collect_backstop_heuristic_findings(
     *,
     chunks: list[CodeChunk],
     kb_hits_by_chunk: dict[int, list[RetrievalHit]],
+    kb_doc_hit_index: dict[str, RetrievalHit],
     repo_root: Path,
 ) -> list[Finding]:
     try:
         heuristic_report = heuristic_scan_chunks(chunks)
     except Exception as exc:
-        logger.warning("Secret heuristic scan failed: %s", exc)
+        logger.warning("Backstop heuristic scan failed: %s", exc)
         return []
 
     findings: list[Finding] = []
     for finding in heuristic_report.findings:
-        if not finding.vuln_type.startswith("SECRET."):
+        vuln_type = finding.vuln_type.strip()
+        if not (
+            any(vuln_type.startswith(prefix) for prefix in _HEURISTIC_BACKSTOP_RULE_PREFIXES)
+            or vuln_type in _HEURISTIC_BACKSTOP_RULE_IDS
+        ):
             continue
         normalized = _normalize_finding(finding, repo_root=repo_root)
         chunk_match = _find_chunk_for_finding(normalized, chunks)
@@ -184,6 +311,7 @@ def _collect_secret_heuristic_findings(
                 normalized,
                 chunk=chunk,
                 kb_hits=kb_hits_by_chunk.get(chunk_index, []),
+                kb_doc_hit_index=kb_doc_hit_index,
             )
         )
     return findings
@@ -284,6 +412,7 @@ def scan_repo(
     llm_timeout_seconds: float | None = None,
     model: str | None = None,
     chunk_size_lines: int | None = None,
+    chunk_overlap_lines: int | None = None,
     resume: bool | None = None,
     prefilter_min_score: float | None = None,
     prefilter_max_candidates: int | None = None,
@@ -310,6 +439,9 @@ def scan_repo(
     )
     effective_model = model if model is not None else settings.scan_model
     effective_chunk_size_lines = max(1, chunk_size_lines if chunk_size_lines is not None else settings.chunk_size_lines)
+    effective_chunk_overlap_lines = max(
+        0, chunk_overlap_lines if chunk_overlap_lines is not None else settings.chunk_overlap_lines
+    )
 
     effective_prefilter_enabled = settings.scan_prefilter_enabled
     effective_prefilter_min_score = min(
@@ -342,9 +474,28 @@ def scan_repo(
 
     raw_files = collect_files(root=repo_path)
     source_files = [SourceFile(**item) for item in raw_files]
-    chunks = chunk_sources(source_files, chunk_size_lines=effective_chunk_size_lines)
-    if effective_max_chunks is not None:
+    chunks = chunk_sources(
+        source_files,
+        chunk_size_lines=effective_chunk_size_lines,
+        chunk_overlap_lines=effective_chunk_overlap_lines,
+    )
+
+    total_chunks = len(chunks)
+    if effective_max_chunks is not None and total_chunks > effective_max_chunks:
+        stats.chunks_truncated = total_chunks - effective_max_chunks
+        logger.warning(
+            "Chunk list truncated from %d to %d (max_chunks=%d)",
+            total_chunks,
+            effective_max_chunks,
+            effective_max_chunks,
+        )
+        _emit_progress(
+            progress_callback,
+            f"[scan] warning: {stats.chunks_truncated} chunks truncated (total={total_chunks}, max_chunks={effective_max_chunks})",
+        )
         chunks = chunks[:effective_max_chunks]
+    else:
+        stats.chunks_truncated = 0
 
     stats.files_scanned = len(source_files)
     stats.chunks_considered = len(chunks)
@@ -370,6 +521,7 @@ def scan_repo(
     persist_dir = _resolve_runtime_path(settings.chroma_persist_dir)
     persist_dir.mkdir(parents=True, exist_ok=True)
 
+    kb_docs: list[KBDocument] = []
     kb_docs_payload: list[tuple[str, str, list[str], str]] = []
     store: ChromaStore | None = None
     try:
@@ -396,29 +548,48 @@ def scan_repo(
     except Exception as exc:
         logger.warning("Falling back to naive KB retrieval because KB index is unavailable: %s", exc)
         store = None
+    kb_doc_hit_index = _build_kb_doc_hit_index(kb_docs)
 
     _emit_progress(progress_callback, "[scan] stage=kb_prefilter start")
     kb_hits_by_chunk: dict[int, list[RetrievalHit]] = {}
     kb_scores: list[float] = []
-    for chunk_index, chunk in enumerate(chunks):
+
+    batch_kb_done = False
+    if store is not None and chunks:
         try:
-            if store is not None:
-                kb_hits = store.query_security_kb(query_text=chunk.text, top_k=effective_top_k, min_score=0.0)
-            else:
-                kb_hits = _fallback_query_kb(chunk=chunk, top_k=effective_top_k, kb_docs=kb_docs_payload)
+            chunk_embeddings = embedder.embed_texts([chunk.text for chunk in chunks])
+            batch_results = store.query_security_kb_batch(
+                query_embeddings=chunk_embeddings, top_k=effective_top_k, min_score=0.0
+            )
+            for chunk_index, hits in enumerate(batch_results):
+                kb_hits_by_chunk[chunk_index] = hits
+                kb_scores.append(hits[0].score if hits else 0.0)
+            batch_kb_done = True
         except Exception as exc:
-            kb_hits = []
-            if len(errors) < MAX_REPORTED_ERRORS:
-                errors.append(
-                    ScanChunkError(
-                        file_path=chunk.file_path,
-                        start_line=chunk.start_line,
-                        end_line=chunk.end_line,
-                        reason=f"kb_query_exception: {exc}",
+            logger.warning("Batch KB query failed, falling back to serial: %s", exc)
+            kb_hits_by_chunk.clear()
+            kb_scores.clear()
+
+    if not batch_kb_done:
+        for chunk_index, chunk in enumerate(chunks):
+            try:
+                if store is not None:
+                    kb_hits = store.query_security_kb(query_text=chunk.text, top_k=effective_top_k, min_score=0.0)
+                else:
+                    kb_hits = _fallback_query_kb(chunk=chunk, top_k=effective_top_k, kb_docs=kb_docs_payload)
+            except Exception as exc:
+                kb_hits = []
+                if len(errors) < MAX_REPORTED_ERRORS:
+                    errors.append(
+                        ScanChunkError(
+                            file_path=chunk.file_path,
+                            start_line=chunk.start_line,
+                            end_line=chunk.end_line,
+                            reason=f"kb_query_exception: {exc}",
+                        )
                     )
-                )
-        kb_hits_by_chunk[chunk_index] = kb_hits
-        kb_scores.append(kb_hits[0].score if kb_hits else 0.0)
+            kb_hits_by_chunk[chunk_index] = kb_hits
+            kb_scores.append(kb_hits[0].score if kb_hits else 0.0)
 
     base_candidate_indices = [index for index, score in enumerate(kb_scores) if score >= effective_threshold]
     stats.skipped_low_similarity = len(chunks) - len(base_candidate_indices)
@@ -614,6 +785,7 @@ def scan_repo(
                         finding,
                         chunk=chunk,
                         kb_hits=kb_hits_by_chunk.get(chunk_index, []),
+                        kb_doc_hit_index=kb_doc_hit_index,
                     )
                     for finding in normalized_cached
                 ]
@@ -671,6 +843,7 @@ def scan_repo(
                                 finding,
                                 chunk=chunk,
                                 kb_hits=kb_hits_by_chunk.get(chunk_index, []),
+                                kb_doc_hit_index=kb_doc_hit_index,
                             )
                             for finding in normalized_fresh
                         ]
@@ -769,16 +942,17 @@ def scan_repo(
     for position in range(total_candidates):
         ordered_findings.extend(candidate_findings.get(position, []))
 
-    secret_heuristic_findings = _collect_secret_heuristic_findings(
+    heuristic_backstop_findings = _collect_backstop_heuristic_findings(
         chunks=chunks,
         kb_hits_by_chunk=kb_hits_by_chunk,
+        kb_doc_hit_index=kb_doc_hit_index,
         repo_root=repo_path,
     )
-    if secret_heuristic_findings:
-        ordered_findings.extend(secret_heuristic_findings)
+    if heuristic_backstop_findings:
+        ordered_findings.extend(heuristic_backstop_findings)
         _emit_progress(
             progress_callback,
-            f"[scan] heuristic secret findings added={len(secret_heuristic_findings)}",
+            f"[scan] heuristic backstop findings added={len(heuristic_backstop_findings)}",
         )
 
     stats.findings_before_dedup = len(ordered_findings)
@@ -795,17 +969,23 @@ def scan_repo(
     scan_finished_at = datetime.now(timezone.utc)
     current_session_ms = int((scan_finished_at - scan_started_at).total_seconds() * 1000)
     stats.duration_ms = stats.duration_ms + current_session_ms if stats.resume_used else current_session_ms
+    chunking_strategy = (
+        f"fixed_lines_overlap_{effective_chunk_overlap_lines}"
+        if effective_chunk_overlap_lines > 0
+        else "fixed_lines_no_overlap"
+    )
     metadata = ScanMetadata(
         repo_path=str(repo_path),
         scan_started_at=scan_started_at,
         scan_finished_at=scan_finished_at,
         model=effective_model,
-        chunking_strategy=_CHUNKING_STRATEGY,
+        chunking_strategy=chunking_strategy,
         embedding_model=settings.embedding_model,
         top_k=effective_top_k,
         similarity_threshold=effective_threshold,
         max_chunks=effective_max_chunks,
         chunk_size_lines=effective_chunk_size_lines,
+        chunk_overlap_lines=effective_chunk_overlap_lines,
         repair_retries=effective_repair_retries,
     )
 

@@ -12,6 +12,9 @@ class _FakeEmbedder:
     def __init__(self, *_: object, **__: object):
         pass
 
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] * 10 for _ in texts]
+
 
 class _HighScoreStore:
     def __init__(self, *_: object, **__: object):
@@ -33,6 +36,23 @@ class _HighScoreStore:
             )
         ]
 
+    def query_security_kb_batch(
+        self, query_embeddings: list[list[float]], top_k: int = 5, min_score: float | None = None
+    ) -> list[list[RetrievalHit]]:
+        return [
+            [
+                RetrievalHit(
+                    id="cwe-89",
+                    title="SQL Injection",
+                    score=0.9,
+                    severity_guidance="high",
+                    tags=["sqli"],
+                    preview="batch",
+                )
+            ]
+            for _ in query_embeddings
+        ]
+
 
 def _patch_common(monkeypatch: object) -> None:
     monkeypatch.setattr(
@@ -43,7 +63,7 @@ def _patch_common(monkeypatch: object) -> None:
     monkeypatch.setattr(
         scan_repo_module,
         "chunk_sources",
-        lambda sources, chunk_size_lines: [CodeChunk(file_path="src/a.py", start_line=1, end_line=20, text="x")],
+        lambda sources, chunk_size_lines, chunk_overlap_lines=0: [CodeChunk(file_path="src/a.py", start_line=1, end_line=20, text="x")],
     )
     monkeypatch.setattr(
         scan_repo_module,
