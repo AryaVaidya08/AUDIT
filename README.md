@@ -134,7 +134,7 @@ Install one or both: `pip install -e ".[llm]"` or `pip install -e ".[llm,vectors
 | `--max-chunks INT` | Cap on total chunks analysed (min 1) |
 | `--chunk-size-lines INT` | Lines of code per chunk sent to the LLM (min 1) |
 | `--llm-timeout-seconds FLOAT` | Per-call LLM timeout in seconds (min 1.0) |
-| `--repair-retries INT` | Retries on malformed LLM JSON responses (min 0) |
+| `--repair-retries INT` | Retries when the LLM response fails structured-output validation (min 0) |
 
 ### Prefilter options
 
@@ -236,7 +236,7 @@ All scan-tuning flags can also be set via environment variables. The most common
 | `SCAN_TOP_K` | KB documents retrieved per chunk | `5` |
 | `SCAN_SIMILARITY_THRESHOLD` | Minimum KB similarity score | `0.2` |
 | `SCAN_MAX_CHUNKS` | Max chunks to analyse (`0` = unlimited) | `300` |
-| `SCAN_REPAIR_RETRIES` | LLM JSON repair retries | `1` |
+| `SCAN_REPAIR_RETRIES` | Retries when the LLM response fails structured-output validation | `1` |
 | `SCAN_LLM_TIMEOUT_SECONDS` | Per-call LLM timeout | `20.0` |
 | `SCAN_CACHE_ENABLED` | Enable SQLite result cache | `true` |
 | `SCAN_CACHE_PATH` | Path to SQLite cache file | `~/Library/Caches/audit/scan_cache.sqlite3` (macOS) |

@@ -190,7 +190,12 @@ def scan(
     top_k: int | None = typer.Option(None, "--top-k", min=1, help="Top KB docs per chunk."),
     threshold: float | None = typer.Option(None, "--threshold", min=0.0, max=1.0, help="Minimum similarity threshold."),
     max_chunks: int | None = typer.Option(None, "--max-chunks", min=1, help="Maximum chunks to consider."),
-    repair_retries: int | None = typer.Option(None, "--repair-retries", min=0, help="LLM JSON repair retries."),
+    repair_retries: int | None = typer.Option(
+        None,
+        "--repair-retries",
+        min=0,
+        help="Retries when the LLM response fails structured-output validation.",
+    ),
     llm_timeout_seconds: float | None = typer.Option(
         None,
         "--llm-timeout-seconds",

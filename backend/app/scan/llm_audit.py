@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import json
 import os
 import time
 from dataclasses import dataclass
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 try:
     from openai import OpenAI
@@ -13,7 +14,7 @@ except ImportError:
     OpenAI = None
     _RateLimitError = None
 
-from app.scan.prompts import build_audit_messages, build_repair_messages
+from app.scan.prompts import build_audit_messages
 from app.scan.schema import CodeChunk, Finding, RetrievalHit
 
 _SEVERITY_MAP = {
@@ -26,6 +27,37 @@ _SEVERITY_MAP = {
     "important": "high",
     "critical": "critical",
     "severe": "critical",
+}
+
+
+class _StructuredFindingPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    vuln_type: str
+    severity: str
+    confidence: float | int | str | None
+    references: list[str] | str | None
+    file_path: str
+    start_line: int | str
+    end_line: int | str
+    message: str
+    evidence: str
+    recommendation: str
+
+
+class _StructuredFindingsEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    findings: list[_StructuredFindingPayload]
+
+
+_AUDIT_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "audit_findings",
+        "strict": True,
+        "schema": _StructuredFindingsEnvelope.model_json_schema(),
+    },
 }
 
 
@@ -208,21 +240,10 @@ def _coerce_finding_payload(item: dict[str, Any], chunk: CodeChunk) -> dict[str,
 
 
 def _parse_findings(raw_output: str, chunk: CodeChunk) -> list[Finding]:
-    payload = json.loads(raw_output)
-    if isinstance(payload, dict):
-        nested = payload.get("findings")
-        if isinstance(nested, list):
-            payload = nested
-        else:
-            raise ValueError("Expected JSON array or object with findings[]")
-    if not isinstance(payload, list):
-        raise ValueError("Expected JSON array output")
-
+    payload = _StructuredFindingsEnvelope.model_validate_json(raw_output)
     findings: list[Finding] = []
-    for index, item in enumerate(payload):
-        if not isinstance(item, dict):
-            raise ValueError(f"Finding at index {index} is not an object")
-        normalized = _coerce_finding_payload(item, chunk)
+    for item in payload.findings:
+        normalized = _coerce_finding_payload(item.model_dump(mode="python"), chunk)
         findings.append(Finding.model_validate(normalized))
     return findings
 
@@ -255,6 +276,7 @@ def _chat(
         model=model,
         temperature=0,
         timeout=timeout_seconds,
+        response_format=_AUDIT_RESPONSE_FORMAT,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -283,16 +305,13 @@ def audit_chunk_with_llm(
     prompt_tokens = 0
     completion_tokens = 0
     total_tokens = 0
-    raw_output = ""
     last_error = "unknown_error"
     effective_timeout = _normalize_timeout(timeout_seconds)
+    system_prompt, user_prompt = build_audit_messages(chunk=chunk, kb_hits=kb_hits)
 
     for attempt in range(max(0, repair_retries) + 1):
-        if attempt == 0:
-            system_prompt, user_prompt = build_audit_messages(chunk=chunk, kb_hits=kb_hits)
-        else:
+        if attempt > 0:
             llm_retries += 1
-            system_prompt, user_prompt = build_repair_messages(raw_output=raw_output)
 
         try:
             max_rate_limit_retries = 3
@@ -329,7 +348,7 @@ def audit_chunk_with_llm(
                 completion_tokens=completion_tokens,
                 total_tokens=total_tokens,
             )
-        except (json.JSONDecodeError, ValueError, KeyError) as exc:
+        except (ValidationError, ValueError, KeyError) as exc:
             parse_failures += 1
             last_error = f"parse_error: {exc}"
         except Exception as exc:

@@ -71,25 +71,27 @@ def _sample_hits() -> list[RetrievalHit]:
     ]
 
 
-def test_audit_chunk_repairs_and_normalizes_output() -> None:
+def test_audit_chunk_retries_invalid_structured_output_and_normalizes_findings() -> None:
     client = _FakeClient(
         outputs=[
             "not-json-at-all",
             """
-            [
-              {
-                "vuln_type": "SQLI",
-                "severity": "Severe",
-                "confidence": 1.7,
-                "references": "cwe-89",
-                "file_path": "/tmp/demo/src/app.py",
-                "start_line": 12,
-                "end_line": 10,
-                "message": "Potential SQL injection\\nextra",
-                "evidence": "dynamic query",
-                "recommendation": "parameterize query"
-              }
-            ]
+            {
+              "findings": [
+                {
+                  "vuln_type": "SQLI",
+                  "severity": "Severe",
+                  "confidence": 1.7,
+                  "references": "cwe-89",
+                  "file_path": "/tmp/demo/src/app.py",
+                  "start_line": 12,
+                  "end_line": 10,
+                  "message": "Potential SQL injection\\nextra",
+                  "evidence": "dynamic query",
+                  "recommendation": "parameterize query"
+                }
+              ]
+            }
             """.strip(),
         ]
     )
@@ -136,20 +138,22 @@ def test_audit_chunk_clamps_and_converts_chunk_relative_lines() -> None:
     client = _FakeClient(
         outputs=[
             """
-            [
-              {
-                "vuln_type": "Hardcoded secret",
-                "severity": "high",
-                "confidence": 0.9,
-                "references": ["CWE-798"],
-                "file_path": "src/worker.py",
-                "start_line": 2,
-                "end_line": 999,
-                "message": "Hardcoded API key",
-                "evidence": "API_KEY = \\"abc\\"",
-                "recommendation": "Move secrets to environment variables."
-              }
-            ]
+            {
+              "findings": [
+                {
+                  "vuln_type": "Hardcoded secret",
+                  "severity": "high",
+                  "confidence": 0.9,
+                  "references": ["CWE-798"],
+                  "file_path": "src/worker.py",
+                  "start_line": 2,
+                  "end_line": 999,
+                  "message": "Hardcoded API key",
+                  "evidence": "API_KEY = \\"abc\\"",
+                  "recommendation": "Move secrets to environment variables."
+                }
+              ]
+            }
             """.strip()
         ]
     )
@@ -172,7 +176,7 @@ def test_audit_chunk_tracks_token_usage_across_retries() -> None:
     client = _FakeClient(
         outputs=[
             "not-json-at-all",
-            "[]",
+            '{"findings": []}',
         ],
         token_usage=[
             (120, 20, 140),
