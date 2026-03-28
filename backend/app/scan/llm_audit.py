@@ -16,6 +16,7 @@ except ImportError:
 
 from app.scan.prompts import build_audit_messages
 from app.scan.schema import CodeChunk, Finding, RetrievalHit
+from app.scan.taxonomy import restore_finding
 
 _SEVERITY_MAP = {
     "low": "low",
@@ -33,7 +34,9 @@ _SEVERITY_MAP = {
 class _StructuredFindingPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    vuln_type: str
+    vuln_type: str | None = None
+    title: str | None = None
+    rule_id: str | None = None
     severity: str
     confidence: float | int | str | None
     references: list[str] | str | None
@@ -51,14 +54,44 @@ class _StructuredFindingsEnvelope(BaseModel):
     findings: list[_StructuredFindingPayload]
 
 
-_AUDIT_RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "audit_findings",
-        "strict": True,
-        "schema": _StructuredFindingsEnvelope.model_json_schema(),
-    },
-}
+def _normalize_strict_json_schema(node: Any) -> Any:
+    if isinstance(node, list):
+        return [_normalize_strict_json_schema(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+
+    normalized = {
+        key: _normalize_strict_json_schema(value)
+        for key, value in node.items()
+        if key != "default"
+    }
+    properties = normalized.get("properties")
+    if isinstance(properties, dict):
+        normalized["required"] = list(properties.keys())
+        normalized.setdefault("additionalProperties", False)
+    return normalized
+
+
+def _build_audit_response_format() -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "audit_findings",
+            "strict": True,
+            "schema": _normalize_strict_json_schema(_StructuredFindingsEnvelope.model_json_schema()),
+        },
+    }
+
+
+def _should_fallback_to_json_object(exc: Exception) -> bool:
+    message = str(exc).lower()
+    if "response_format" not in message and "json_schema" not in message:
+        return False
+    return "invalid schema" in message or "required" in message or "strict" in message
+
+
+_AUDIT_RESPONSE_FORMAT = _build_audit_response_format()
+_JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
 
 
 @dataclass(frozen=True)
@@ -211,14 +244,14 @@ def _normalize_one_liner(raw_value: Any, fallback: str) -> str:
 
 
 def _coerce_finding_payload(item: dict[str, Any], chunk: CodeChunk) -> dict[str, Any]:
-    vuln_type = str(item.get("vuln_type") or item.get("rule_id") or item.get("title") or "unspecified").strip()
-    if not vuln_type:
-        vuln_type = "unspecified"
+    title = str(item.get("title") or item.get("vuln_type") or item.get("rule_id") or "Unspecified").strip()
+    if not title:
+        title = "Unspecified"
     start_line = _normalize_line_in_chunk(item.get("start_line"), chunk=chunk, fallback=chunk.start_line)
     end_line = _normalize_line_in_chunk(item.get("end_line"), chunk=chunk, fallback=start_line)
     if end_line < start_line:
         end_line = start_line
-    message = _normalize_one_liner(item.get("message"), fallback=f"Potential issue: {vuln_type}")
+    message = _normalize_one_liner(item.get("message"), fallback=f"Potential issue: {title}")
     evidence = str(item.get("evidence") or item.get("snippet") or "No evidence supplied by model.").strip()
     recommendation = str(
         item.get("recommendation")
@@ -226,7 +259,9 @@ def _coerce_finding_payload(item: dict[str, Any], chunk: CodeChunk) -> dict[str,
         or "Review and apply secure coding guidance for this vulnerability type."
     ).strip()
     return {
-        "vuln_type": vuln_type,
+        "vuln_type": str(item.get("vuln_type") or item.get("title") or item.get("rule_id") or "unspecified").strip(),
+        "title": title,
+        "rule_id": str(item.get("rule_id") or "").strip() or None,
         "severity": _normalize_severity(item.get("severity")),
         "confidence": _normalize_confidence(item.get("confidence")),
         "references": _normalize_references(item.get("references")),
@@ -244,7 +279,7 @@ def _parse_findings(raw_output: str, chunk: CodeChunk) -> list[Finding]:
     findings: list[Finding] = []
     for item in payload.findings:
         normalized = _coerce_finding_payload(item.model_dump(mode="python"), chunk)
-        findings.append(Finding.model_validate(normalized))
+        findings.append(restore_finding(normalized, context=chunk.text))
     return findings
 
 
@@ -272,18 +307,32 @@ def _chat(
     user_prompt: str,
     timeout_seconds: float,
 ) -> tuple[str, int, int, int]:
-    response = client.chat.completions.create(
-        model=model,
-        temperature=0,
-        timeout=timeout_seconds,
-        response_format=_AUDIT_RESPONSE_FORMAT,
-        messages=[
+    request_kwargs = {
+        "model": model,
+        "temperature": 0,
+        "timeout": timeout_seconds,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-    )
-    prompt_tokens, completion_tokens, total_tokens = _extract_token_usage(response)
-    return _extract_response_text(response), prompt_tokens, completion_tokens, total_tokens
+    }
+
+    last_exc: Exception | None = None
+    for index, response_format in enumerate((_AUDIT_RESPONSE_FORMAT, _JSON_OBJECT_RESPONSE_FORMAT)):
+        try:
+            response = client.chat.completions.create(
+                **request_kwargs,
+                response_format=response_format,
+            )
+            prompt_tokens, completion_tokens, total_tokens = _extract_token_usage(response)
+            return _extract_response_text(response), prompt_tokens, completion_tokens, total_tokens
+        except Exception as exc:
+            last_exc = exc
+            if index == 0 and _should_fallback_to_json_object(exc):
+                continue
+            raise
+
+    raise RuntimeError(str(last_exc) if last_exc is not None else "chat completion failed")
 
 
 def audit_chunk_with_llm(

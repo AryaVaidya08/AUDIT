@@ -36,10 +36,18 @@ class CodeChunk(StrictModel):
 
 
 class Finding(StrictModel):
-    vuln_type: str = Field(min_length=1)
+    vuln_type: str = Field(min_length=1, pattern=r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
+    title: str = Field(min_length=1)
+    rule_id: str | None = Field(default=None, min_length=1)
     severity: Severity
     confidence: float = Field(ge=0.0, le=1.0)
-    references: list[str] = Field(default_factory=list)
+    references: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Canonical external standards only, currently CWE and OWASP Top 10 category ids "
+            "such as CWE-89 and OWASP-A03. Internal KB document ids belong in kb_evidence[].id."
+        ),
+    )
     file_path: str
     start_line: int = Field(ge=1)
     end_line: int = Field(ge=1)
@@ -53,6 +61,8 @@ class Finding(StrictModel):
     def _validate_line_range(self) -> "Finding":
         if self.end_line < self.start_line:
             raise ValueError("end_line must be >= start_line")
+        if "\n" in self.title:
+            raise ValueError("title must be a single line")
         if "\n" in self.message:
             raise ValueError("message must be a single line")
         return self
@@ -63,6 +73,9 @@ class ScanStats(StrictModel):
     chunks_considered: int = Field(default=0, ge=0)
     chunks_prefiltered: int = Field(default=0, ge=0)
     chunks_sent_to_llm: int = Field(default=0, ge=0)
+    candidate_supported_files: int = Field(default=0, ge=0)
+    candidate_regions_extracted: int = Field(default=0, ge=0)
+    candidate_files_fallback: int = Field(default=0, ge=0)
     cache_hits: int = Field(default=0, ge=0)
     cache_misses: int = Field(default=0, ge=0)
     llm_calls: int = Field(default=0, ge=0)
@@ -83,12 +96,13 @@ class ScanStats(StrictModel):
 
 
 class ScanMetadata(StrictModel):
-    schema_version: str = "1.1.0"
+    schema_version: str = "2.0.0"
     repo_path: str
     scan_started_at: datetime
     scan_finished_at: datetime
     model: str
     chunking_strategy: str = "fixed_lines_no_overlap"
+    candidate_strategy: str = "legacy_fixed_lines"
     embedding_model: str = ""
     top_k: int = Field(ge=1)
     similarity_threshold: float = Field(ge=0.0, le=1.0)
@@ -137,6 +151,7 @@ class RetrievalHit(StrictModel):
     severity_guidance: str
     tags: list[str] = Field(default_factory=list)
     domain: str = ""
+    weakness_type: str = ""
     cwe: str = ""
     owasp_2021: str = ""
     preview: str = ""

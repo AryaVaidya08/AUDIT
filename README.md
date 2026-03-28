@@ -4,12 +4,13 @@
 
 ## Why AUDIT?
 
-AUDIT combines LLM-powered analysis with a curated 49-pattern knowledge base to find real vulnerabilities in your code (not just lint warnings). It runs locally, caches results incrementally so rescans are fast, and produces machine-readable JSON reports that slot straight into CI pipelines. When the LLM is unavailable, a heuristic prefilter still catches the obvious issues.
+AUDIT combines LLM-powered analysis with a curated 50-pattern knowledge base to find real vulnerabilities in your code (not just lint warnings). It runs locally, caches results incrementally so rescans are fast, and produces machine-readable JSON reports that slot straight into CI pipelines. When the LLM is unavailable, a heuristic prefilter still catches the obvious issues.
 
 ## Feature Highlights
 
 - **AI-powered analysis**: each code chunk is evaluated by an LLM with retrieval-augmented context from the knowledge base
-- **49-pattern knowledge base**: covers 12 vulnerability categories mapped to CWE and OWASP Top 10
+- **50-pattern knowledge base**: covers 12 vulnerability categories mapped to CWE and OWASP Top 10
+- **Structured candidate stage**: focuses Python and JS/TS scans on high-signal functions, handlers, middleware, and named route callbacks before KB retrieval
 - **Heuristic prefilter**: scores chunks before LLM calls to skip irrelevant code and cut costs
 - **Incremental caching**: SQLite cache keyed on content hash; unchanged code is never re-scanned
 - **Resume/checkpoint**: interrupted scans pick up where they left off
@@ -23,7 +24,7 @@ AUDIT’s knowledge base covers 12 vulnerability categories:
 
 | # | Category | Patterns |
 |---|----------|----------|
-| 1 | Injection (SQL, command, template, NoSQL, LDAP, XPath, header, log, expression language) | 9 |
+| 1 | Injection (SQL, command, unsafe dynamic code execution, template, NoSQL, LDAP, XPath, header, log, expression language) | 10 |
 | 2 | Authentication & Session (JWT, OAuth, MFA bypass, session fixation) | 5 |
 | 3 | Authorization & Access Control (CSRF, IDOR, mass assignment) | 3 |
 | 4 | Crypto & Secrets (hardcoded creds, API key exposure, weak crypto) | 4 |
@@ -49,7 +50,7 @@ audit . --out report.json
 ```
 source repo
   → file collection & language filtering
-    → chunking (configurable line count per chunk)
+    → structured candidate generation (Python + JS/TS) / legacy chunking
       → heuristic prefilter (score & rank)
         → KB retrieval (top-k similar patterns per chunk)
           → LLM analysis (with RAG context)
@@ -57,7 +58,7 @@ source repo
               → JSON report + stdout summary
 ```
 
-Files are split into chunks, scored by a fast heuristic prefilter, then matched against the knowledge base using similarity search. Each surviving chunk is sent to the LLM along with the most relevant KB patterns as context. Results are cached by content hash so unchanged code is never re-analysed. Scans can be resumed from checkpoints if interrupted.
+Python and JS/TS files first pass through a structured candidate stage that narrows scanning to high-signal regions such as handlers, middleware, auth helpers, named route callbacks, and dangerous sinks. Unsupported languages stay on legacy fixed-line chunking. The resulting chunks are scored by a heuristic prefilter, then matched against the knowledge base using similarity search. Each surviving chunk is sent to the LLM along with the most relevant KB patterns as context. Results are cached by content hash so unchanged code is never re-analysed. Scans can be resumed from checkpoints if interrupted.
 
 ## Install
 
@@ -142,6 +143,7 @@ Install one or both: `pip install -e ".[llm]"` or `pip install -e ".[llm,vectors
 |---|---|
 | `--prefilter-min-score FLOAT` | Discard chunks below this heuristic score (0.0-1.0) |
 | `--prefilter-max-candidates INT` | Max chunks forwarded to LLM/cache after pre-filtering (min 1) |
+| `--candidate-stage / --no-candidate-stage` | Enable or disable structured candidate generation before KB retrieval and LLM |
 
 ### Concurrency
 
@@ -163,6 +165,9 @@ AUDIT can cache chunk-level results so repeated scans of unchanged code run fast
 `--cache-scope repo` stores the cache inside the scanned repo at `.audit/scan_cache.sqlite3`.
 `--out` controls where the JSON report is written and can also target the scanned repo.
 
+To clear scanner cache artifacts during development, run `audit dev clear-cache [PATH]`.
+By default this removes repo-local cache artifacts for the target repo, including known `.audit` paths and configured cache paths that resolve inside that repo. Add `--shared` to also remove configured shared cache locations outside the repo.
+
 ### Resume / checkpoint
 
 | Flag | Description |
@@ -181,6 +186,8 @@ AUDIT can cache chunk-level results so repeated scans of unchanged code run fast
 ## What you should see
 
 `audit` writes a full JSON report to the path given by `--out` (default: `report.json` in the current directory) and prints a readable summary to stdout.
+
+In the JSON report, each finding's `references` field contains canonical external standards only. Example: `["CWE-89", "OWASP-A03"]`. Internal knowledge-base document ids remain in `kb_evidence[].id`.
 
 Example summary shape:
 
@@ -210,6 +217,12 @@ audit . --resume --cache
 
 # Disable progress output and limit concurrency
 audit . --no-progress --max-inflight-llm-calls 2
+
+# Clear repo-local cache artifacts for the current repo
+audit dev clear-cache .
+
+# Also clear configured shared cache locations
+audit dev clear-cache . --shared
 
 # Print full usage reference
 audit help
@@ -244,9 +257,11 @@ All scan-tuning flags can also be set via environment variables. The most common
 | `SCAN_PREFILTER_ENABLED` | Enable heuristic prefilter | `true` |
 | `SCAN_PREFILTER_MIN_SCORE` | Minimum prefilter score | `0.2` |
 | `SCAN_PREFILTER_MAX_CANDIDATES` | Max candidates after prefilter | `200` |
+| `SCAN_CANDIDATE_STAGE_ENABLED` | Enable structured candidate generation | `true` |
 | `CHUNK_SIZE_LINES` | Lines per code chunk | `120` |
 | `KB_SCORE_THRESHOLD` | Minimum KB retrieval score for results | `0.2` |
-| `AUDIT_ALLOWED_SCAN_ROOT` | (API server only) Restrict `/scan` and `/index` to paths under this root | current working directory |
+
+Relative runtime paths such as `CHROMA_PERSIST_DIR=.chroma` are resolved from the scanned repository root. Explicit CLI path arguments remain relative to your current working directory.
 
 ## Release artifacts
 

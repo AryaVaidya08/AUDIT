@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from app.scan.schema import Finding
+from app.scan.taxonomy import restore_finding
 from app.utils.hash import sha256_hexdigest
 
 
@@ -116,7 +117,7 @@ class ScanCache:
                     is_valid = True
                     for item in parsed:
                         try:
-                            findings.append(Finding.model_validate(item))
+                            findings.append(restore_finding(item))
                         except Exception:
                             is_valid = False
                             break

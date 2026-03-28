@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.scan.llm_audit import audit_chunk_with_llm
+from app.scan.llm_audit import _AUDIT_RESPONSE_FORMAT, audit_chunk_with_llm
 from app.scan.schema import CodeChunk, RetrievalHit
 
 
@@ -109,6 +109,8 @@ def test_audit_chunk_retries_invalid_structured_output_and_normalizes_findings()
     assert result.parse_failures == 1
     assert len(result.findings) == 1
     finding = result.findings[0]
+    assert finding.vuln_type == "sql_injection"
+    assert finding.title == "SQL Injection"
     assert finding.severity == "critical"
     assert finding.confidence == 1.0
     assert finding.end_line == 12
@@ -168,6 +170,8 @@ def test_audit_chunk_clamps_and_converts_chunk_relative_lines() -> None:
     assert result.skipped_parse_error is False
     assert len(result.findings) == 1
     finding = result.findings[0]
+    assert finding.vuln_type == "hardcoded_credentials"
+    assert finding.title == "Hardcoded Credentials"
     assert finding.start_line == 41
     assert finding.end_line == 42
 
@@ -196,3 +200,52 @@ def test_audit_chunk_tracks_token_usage_across_retries() -> None:
     assert result.prompt_tokens == 200
     assert result.completion_tokens == 30
     assert result.total_tokens == 230
+
+
+def test_audit_response_schema_marks_all_fields_required_for_strict_mode() -> None:
+    schema = _AUDIT_RESPONSE_FORMAT["json_schema"]["schema"]
+    finding_schema = schema["$defs"]["_StructuredFindingPayload"]
+
+    assert set(finding_schema["required"]) == set(finding_schema["properties"])
+    assert all("default" not in value for value in finding_schema["properties"].values())
+
+
+def test_audit_chunk_falls_back_to_json_object_when_strict_schema_is_rejected() -> None:
+    class _SchemaRejectingCompletions:
+        def __init__(self) -> None:
+            self.response_formats: list[dict[str, object]] = []
+
+        def create(self, **kwargs: object) -> _FakeResponse:
+            response_format = kwargs["response_format"]
+            assert isinstance(response_format, dict)
+            self.response_formats.append(response_format)
+            if response_format.get("type") == "json_schema":
+                raise Exception(
+                    "Error code: 400 - {'error': {'message': "
+                    "\"Invalid schema for response_format 'audit_findings': Missing 'vuln_type'.\"}}"
+                )
+            return _FakeResponse('{"findings": []}', prompt_tokens=90, completion_tokens=12, total_tokens=102)
+
+    class _SchemaRejectingChat:
+        def __init__(self) -> None:
+            self.completions = _SchemaRejectingCompletions()
+
+    class _SchemaRejectingClient:
+        def __init__(self) -> None:
+            self.chat = _SchemaRejectingChat()
+
+    client = _SchemaRejectingClient()
+    result = audit_chunk_with_llm(
+        chunk=_sample_chunk(),
+        kb_hits=_sample_hits(),
+        model="gpt-4.1-mini",
+        repair_retries=0,
+        client=client,
+    )
+
+    assert result.skipped_parse_error is False
+    assert result.llm_calls == 1
+    assert result.prompt_tokens == 90
+    assert result.completion_tokens == 12
+    assert result.total_tokens == 102
+    assert [item["type"] for item in client.chat.completions.response_formats] == ["json_schema", "json_object"]

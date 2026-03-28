@@ -8,6 +8,7 @@ try:
 except ImportError:
     chromadb = None
 
+from app.config import settings
 from app.embed.embeddings import TextEmbedder
 from app.scan.schema import CodeChunk, KBDocument, RetrievalHit
 from app.utils.hash import code_chunk_id
@@ -33,7 +34,8 @@ class ChromaStore:
             raise RuntimeError("chromadb is not installed. Install with: pip install chromadb")
 
         self._embedder = embedder
-        self._client = chromadb.PersistentClient(path=persist_dir)
+        client_settings = chromadb.Settings(anonymized_telemetry=settings.chroma_anonymized_telemetry)
+        self._client = chromadb.PersistentClient(path=persist_dir, settings=client_settings)
         self._code_chunks = self._client.get_or_create_collection(name=collections.code_chunks)
         self._security_kb = self._client.get_or_create_collection(name=collections.security_kb)
 
@@ -93,6 +95,7 @@ class ChromaStore:
                 "tags": ",".join(doc.tags),
                 "severity_guidance": doc.severity_guidance,
                 "domain": doc.domain,
+                "weakness_type": doc.weakness_type,
                 "cwe": doc.cwe,
                 "owasp_2021": doc.owasp_2021,
             }
@@ -180,6 +183,7 @@ class ChromaStore:
                         severity_guidance=str(meta.get("severity_guidance", "medium")),
                         tags=tags,
                         domain=str(meta.get("domain", "")),
+                        weakness_type=str(meta.get("weakness_type", "")),
                         cwe=str(meta.get("cwe", "")),
                         owasp_2021=str(meta.get("owasp_2021", "")),
                         preview=str(raw_preview)[:240],
@@ -225,6 +229,7 @@ class ChromaStore:
                     severity_guidance=str(meta.get("severity_guidance", "medium")),
                     tags=tags,
                     domain=str(meta.get("domain", "")),
+                    weakness_type=str(meta.get("weakness_type", "")),
                     cwe=str(meta.get("cwe", "")),
                     owasp_2021=str(meta.get("owasp_2021", "")),
                     preview=str(raw_preview)[:240],

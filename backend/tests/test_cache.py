@@ -10,6 +10,7 @@ from app.scan.schema import Finding
 def _sample_finding() -> Finding:
     return Finding(
         vuln_type="sql_injection",
+        title="SQL Injection",
         severity="high",
         confidence=0.9,
         references=["cwe-89"],
@@ -89,3 +90,40 @@ def test_scan_cache_skips_invalid_cached_findings_payload(tmp_path: Path) -> Non
 
     hits = cache.get_many([bad_key])
     assert bad_key not in hits
+
+
+def test_scan_cache_upgrades_legacy_findings_without_title_or_rule_id(tmp_path: Path) -> None:
+    cache_path = tmp_path / "scan_cache.sqlite3"
+    cache = ScanCache(cache_path)
+    cache.ensure_schema()
+
+    legacy_key = "legacy-key"
+    with sqlite3.connect(cache_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO scan_cache (
+                cache_key, repo_path, file_path, start_line, end_line, chunk_hash, model, prompt_version, findings_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                legacy_key,
+                str(tmp_path / "repo"),
+                "src/app.py",
+                1,
+                20,
+                "chunkhash",
+                "gpt-4.1-mini",
+                "v1",
+                '[{"vuln_type":"SQL Injection","severity":"high","confidence":0.8,"references":["cwe-89"],'
+                '"file_path":"src/app.py","start_line":10,"end_line":10,"message":"Possible SQL injection.",'
+                '"evidence":"query = f\\"SELECT ... {user_input}\\"","recommendation":"Use parameterized queries."}]',
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+
+    hits = cache.get_many([legacy_key])
+
+    assert hits[legacy_key][0].vuln_type == "sql_injection"
+    assert hits[legacy_key][0].title == "SQL Injection"
+    assert hits[legacy_key][0].rule_id is None

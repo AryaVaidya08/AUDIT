@@ -25,8 +25,5 @@ dist/
 build/
 .next/
 
-AGENTS.md
-AGENT_CONTEXT.md
-CLAUDE.md
-GEMINI.md
-agent_context/
+.claude
+.vscode/

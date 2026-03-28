@@ -5,7 +5,7 @@ from textwrap import dedent
 
 from app.scan.schema import CodeChunk, RetrievalHit
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v4"
 
 
 def _render_hits(hits: list[RetrievalHit]) -> str:
@@ -18,6 +18,7 @@ def _render_hits(hits: list[RetrievalHit]) -> str:
             "score": round(hit.score, 4),
             "severity_guidance": hit.severity_guidance,
             "domain": hit.domain or None,
+            "weakness_type": hit.weakness_type or None,
             "cwe": hit.cwe or None,
             "owasp_2021": hit.owasp_2021 or None,
             "tags": hit.tags,
@@ -41,11 +42,18 @@ def build_audit_messages(chunk: CodeChunk, kb_hits: list[RetrievalHit]) -> tuple
         You are a security auditor.
         Review only the provided code chunk and report real security issues supported by the code and KB context.
         Use the provided structured response schema.
+        Return a single JSON object shaped like {{"findings": [...]}}.
         If no security issue exists in this chunk, return an empty findings list.
+        Every finding object must include these keys:
+        vuln_type, title, rule_id, severity, confidence, references, file_path, start_line, end_line, message, evidence, recommendation.
+        If vuln_type, title, or rule_id are unknown, use null instead of omitting the key.
         Each finding must use absolute file line numbers within the provided chunk range.
         For one-line findings, set end_line equal to start_line.
+        title must be a short human-readable vulnerability label.
         message must be a single-line summary.
-        references must be short strings.
+        references must be canonical external standards when known, such as CWE-89 or OWASP-A03.
+        Do not put KB document ids such as auth-missing-middleware in references.
+        Do not put prose descriptions in references.
         severity must be one of: low, medium, high, critical.
         """
     ).strip()

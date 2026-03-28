@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Literal, Pattern
 
 from app.scan.schema import CodeChunk, Finding, ScanMetadata, ScanReport, ScanStats
+from app.scan.taxonomy import resolve_finding_taxonomy
 
 
 @dataclass(frozen=True)
@@ -113,8 +114,11 @@ _ADMIN_ROUTE_WINDOW_LINES = 10
 
 
 def _build_finding(rule: HeuristicRule, chunk: CodeChunk, line_number: int, line: str) -> Finding:
+    taxonomy = resolve_finding_taxonomy(rule_id=rule.rule_id, title=rule.title, evidence=line)
     return Finding(
-        vuln_type=rule.rule_id,
+        vuln_type=taxonomy.vuln_type,
+        title=taxonomy.title,
+        rule_id=taxonomy.rule_id,
         severity=rule.severity,
         confidence=0.6,
         references=[],
@@ -128,8 +132,15 @@ def _build_finding(rule: HeuristicRule, chunk: CodeChunk, line_number: int, line
 
 
 def _build_missing_auth_finding(chunk: CodeChunk, line_number: int, line: str) -> Finding:
+    taxonomy = resolve_finding_taxonomy(
+        rule_id="AUTH.MISSING_ADMIN_GUARD",
+        title="Missing Admin Guard",
+        evidence=line,
+    )
     return Finding(
-        vuln_type="AUTH.MISSING_ADMIN_GUARD",
+        vuln_type=taxonomy.vuln_type,
+        title=taxonomy.title,
+        rule_id=taxonomy.rule_id,
         severity="high",
         confidence=0.55,
         references=[],

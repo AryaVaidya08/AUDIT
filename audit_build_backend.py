@@ -7,7 +7,7 @@ from pathlib import Path
 import zipfile
 
 PROJECT_NAME = "audit-local-scanner"
-PROJECT_VERSION = "0.1.1"
+PROJECT_VERSION = "0.2.0"
 SUMMARY = "Local-first security scanning CLI with deterministic fallback heuristics."
 REQUIRES_PYTHON = ">=3.10"
 REQUIRES_DIST = (

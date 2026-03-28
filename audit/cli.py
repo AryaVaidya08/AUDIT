@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import sys
 from collections import Counter
 from collections.abc import Sequence
@@ -18,6 +19,7 @@ else:
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from app.config import settings
 from app.scan.scan_repo import scan_repo
 from app.scan.schema import Finding, ScanReport
 
@@ -26,6 +28,11 @@ app = typer.Typer(
     no_args_is_help=False,
     help="Audit local repositories for security findings.",
 )
+dev_app = typer.Typer(
+    add_completion=False,
+    help="Developer maintenance commands.",
+)
+app.add_typer(dev_app, name="dev")
 
 
 @app.callback()
@@ -43,6 +50,7 @@ class FailOnSeverity(str, Enum):
 _SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 _SEVERITY_SUMMARY_ORDER = ("critical", "high", "medium", "low")
 _ROOT_HELP_FLAGS = {"-h", "--help", "--version", "--install-completion", "--show-completion"}
+_TOP_LEVEL_COMMANDS = {"scan", "help", "dev"}
 
 
 def _severity_value(raw: Any) -> str:
@@ -54,7 +62,7 @@ def _normalize_args(raw_args: Sequence[str]) -> list[str]:
     if not raw_args:
         return ["scan", "."]
 
-    if raw_args[0] in {"scan", "help"} | _ROOT_HELP_FLAGS:
+    if raw_args[0] in _TOP_LEVEL_COMMANDS | _ROOT_HELP_FLAGS:
         return list(raw_args)
     return ["scan", *raw_args]
 
@@ -87,7 +95,7 @@ def _print_summary(report: ScanReport, out_path: Path) -> None:
             severity = _severity_value(finding.severity)
             typer.echo(
                 f"{index}. [{severity}] {finding.file_path}:{finding.start_line} "
-                f"{finding.vuln_type} - {finding.message}"
+                f"{finding.title} - {finding.message}"
             )
 
     typer.echo(f"Full report: {out_path}")
@@ -107,6 +115,109 @@ def _resolve_out_path(out: Path) -> Path:
     return (Path.cwd() / expanded).resolve()
 
 
+def _resolve_runtime_path(raw_path: str | Path, *, base_dir: Path | None = None) -> Path:
+    expanded = Path(raw_path).expanduser()
+    if expanded.is_absolute():
+        return expanded.resolve()
+    anchor = Path.cwd() if base_dir is None else base_dir
+    return (anchor / expanded).resolve()
+
+
+def _unique_paths(paths: Sequence[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for path in paths:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(resolved)
+    return unique
+
+
+def _forbidden_cache_paths(repo_path: Path) -> set[Path]:
+    return {
+        Path("/").resolve(),
+        Path.home().resolve(),
+        Path.cwd().resolve(),
+        repo_path.resolve(),
+    }
+
+
+def _is_within_repo(path: Path, *, repo_path: Path) -> bool:
+    try:
+        path.resolve().relative_to(repo_path.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _configured_cache_targets(repo_path: Path) -> list[Path]:
+    return [
+        _resolve_runtime_path(settings.scan_cache_path, base_dir=repo_path),
+        _resolve_runtime_path(settings.scan_checkpoint_path, base_dir=repo_path),
+        _resolve_runtime_path(settings.chroma_persist_dir, base_dir=repo_path),
+    ]
+
+
+def _repo_cache_targets(repo_path: Path) -> list[Path]:
+    repo_cache_dir = (repo_path / ".audit").resolve()
+    repo_targets = [
+        repo_cache_dir / "scan_cache.sqlite3",
+        repo_cache_dir / "scan_resume.json",
+        repo_cache_dir / "chroma",
+    ]
+    configured_targets = [
+        path for path in _configured_cache_targets(repo_path) if _is_within_repo(path, repo_path=repo_path)
+    ]
+    return _unique_paths([*configured_targets, *repo_targets])
+
+
+def _shared_cache_targets(repo_path: Path) -> list[Path]:
+    return [
+        path for path in _configured_cache_targets(repo_path) if not _is_within_repo(path, repo_path=repo_path)
+    ]
+
+
+def _prune_empty_cache_dirs(paths: Sequence[Path], *, repo_path: Path) -> list[Path]:
+    pruned: list[Path] = []
+    forbidden_paths = _forbidden_cache_paths(repo_path)
+    for path in _unique_paths(paths):
+        resolved = path.resolve()
+        if resolved in forbidden_paths:
+            continue
+        if not resolved.exists() or not resolved.is_dir() or resolved.is_symlink():
+            continue
+        try:
+            next(resolved.iterdir())
+        except StopIteration:
+            resolved.rmdir()
+            pruned.append(resolved)
+        except (FileNotFoundError, NotADirectoryError, OSError):
+            continue
+    return pruned
+
+
+def _delete_cache_target(path: Path, *, repo_path: Path) -> bool:
+    resolved = path.resolve()
+    forbidden_paths = _forbidden_cache_paths(repo_path)
+    if resolved in forbidden_paths:
+        raise ValueError(f"refusing to delete unsafe path: {resolved}")
+
+    if not resolved.exists() and not resolved.is_symlink():
+        return False
+
+    if resolved.is_symlink() or resolved.is_file():
+        resolved.unlink()
+        return True
+
+    if resolved.is_dir():
+        shutil.rmtree(resolved)
+        return True
+
+    raise ValueError(f"unsupported cache target: {resolved}")
+
+
 def _scan_command(
     path: Path,
     out: Path,
@@ -119,6 +230,7 @@ def _scan_command(
     resume: bool,
     prefilter_min_score: float | None,
     prefilter_max_candidates: int | None,
+    candidate_stage_enabled: bool | None,
     max_inflight_llm_calls: int | None,
     cache: bool | None,
     cache_scope: str,
@@ -149,6 +261,7 @@ def _scan_command(
             resume=resume,
             prefilter_min_score=prefilter_min_score,
             prefilter_max_candidates=prefilter_max_candidates,
+            candidate_stage_enabled=candidate_stage_enabled,
             max_inflight_llm_calls=max_inflight_llm_calls,
             cache_enabled=cache,
             cache_path=effective_cache_path,
@@ -220,6 +333,11 @@ def scan(
         min=1,
         help="Maximum prefiltered candidates sent to cache/LLM stage.",
     ),
+    candidate_stage_enabled: bool | None = typer.Option(
+        None,
+        "--candidate-stage/--no-candidate-stage",
+        help="Enable or disable structured candidate generation before KB retrieval and LLM analysis.",
+    ),
     max_inflight_llm_calls: int | None = typer.Option(
         None,
         "--max-inflight-llm-calls",
@@ -254,6 +372,7 @@ def scan(
         resume=resume,
         prefilter_min_score=prefilter_min_score,
         prefilter_max_candidates=prefilter_max_candidates,
+        candidate_stage_enabled=candidate_stage_enabled,
         max_inflight_llm_calls=max_inflight_llm_calls,
         cache=cache,
         cache_scope=cache_scope,
@@ -266,6 +385,48 @@ def scan(
     )
 
 
+@dev_app.command("clear-cache")
+def clear_cache(
+    path: Path = typer.Argument(Path("."), help="Repository path whose repo-local cache artifacts should be cleared."),
+    shared: bool = typer.Option(
+        False,
+        "--shared",
+        help="Also remove configured shared cache artifacts outside the target repo.",
+    ),
+) -> int:
+    repo_path = path.expanduser().resolve()
+    if not repo_path.exists() or not repo_path.is_dir():
+        typer.echo(f"ERROR: repository path does not exist or is not a directory: {repo_path}", err=True)
+        return 2
+
+    targets = _repo_cache_targets(repo_path)
+    if shared:
+        targets = _unique_paths([*targets, *_shared_cache_targets(repo_path)])
+
+    removed: list[Path] = []
+    try:
+        for target in targets:
+            if _delete_cache_target(target, repo_path=repo_path):
+                removed.append(target)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"ERROR: {exc}", err=True)
+        return 2
+
+    prune_candidates = [(repo_path / ".audit").resolve(), *(target.parent for target in targets)]
+    removed.extend(
+        _prune_empty_cache_dirs(prune_candidates, repo_path=repo_path)
+    )
+
+    if not removed:
+        typer.echo("No cache artifacts found.")
+        return 0
+
+    typer.echo("Removed cache artifacts:")
+    for target in removed:
+        typer.echo(f"- {target}")
+    return 0
+
+
 _HELP_TEXT = """\
 audit - local-first security scanner
 ==========================================
@@ -273,6 +434,7 @@ audit - local-first security scanner
 USAGE
   audit [PATH] [OPTIONS]
   audit scan [PATH] [OPTIONS]
+  audit dev clear-cache [PATH] [--shared]
   audit help
 
 PATH defaults to the current directory when omitted.
@@ -280,6 +442,7 @@ PATH defaults to the current directory when omitted.
 
 COMMANDS
   scan      Scan a repository for security vulnerabilities (default command).
+  dev       Developer maintenance commands.
   help      Print this help message and exit.
 
 CORE OPTIONS
@@ -326,6 +489,9 @@ PREFILTER OPTIONS
   --prefilter-max-candidates INT (min 1)
       Maximum number of chunks forwarded to the LLM/cache stage after pre-filtering.
 
+  --candidate-stage / --no-candidate-stage
+      Enable or disable structured candidate generation before KB retrieval and LLM analysis.
+
 CONCURRENCY
   --max-inflight-llm-calls INT (min 1)
       Maximum number of concurrent LLM requests in flight at once.
@@ -353,6 +519,13 @@ OUTPUT
   --progress / --no-progress
       Stream per-chunk progress messages to stderr (default: on).
 
+DEV
+  audit dev clear-cache [PATH]
+      Remove repo-local cache artifacts for PATH.
+
+  audit dev clear-cache [PATH] --shared
+      Also remove configured shared cache locations outside PATH.
+
 EXAMPLES
   audit .
 
@@ -363,6 +536,11 @@ EXAMPLES
   audit . --resume --cache
 
   audit . --no-progress --max-inflight-llm-calls 2
+
+  audit dev clear-cache .
+
+  audit dev clear-cache . --shared
+
 """
 
 

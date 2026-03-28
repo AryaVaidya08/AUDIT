@@ -11,6 +11,8 @@ from app.scan.schema import Finding, ScanMetadata, ScanReport, ScanStats
 def _base_finding_payload() -> dict[str, object]:
     return {
         "vuln_type": "sql_injection",
+        "title": "SQL Injection",
+        "rule_id": "SQLI.DYNAMIC_QUERY",
         "severity": "high",
         "confidence": 0.8,
         "references": ["cwe-89"],
@@ -57,4 +59,8 @@ def test_scan_report_is_strict_and_valid() -> None:
     )
     dumped = report.model_dump()
     assert dumped["stats"]["files_scanned"] == 1
+    assert dumped["metadata"]["candidate_strategy"] == "legacy_fixed_lines"
+    assert dumped["metadata"]["schema_version"] == "2.0.0"
     assert dumped["findings"][0]["vuln_type"] == "sql_injection"
+    assert dumped["findings"][0]["title"] == "SQL Injection"
+    assert dumped["findings"][0]["rule_id"] == "SQLI.DYNAMIC_QUERY"

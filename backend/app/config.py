@@ -116,6 +116,7 @@ class Settings:
     exclude_globs: tuple[str, ...]
     kb_dir: str
     chroma_persist_dir: str
+    chroma_anonymized_telemetry: bool
     chroma_collection_code_chunks: str
     chroma_collection_security_kb: str
     embedding_model: str
@@ -130,6 +131,7 @@ class Settings:
     scan_prefilter_enabled: bool
     scan_prefilter_min_score: float
     scan_prefilter_max_candidates: int
+    scan_candidate_stage_enabled: bool
     scan_cache_enabled: bool
     scan_cache_path: str
     scan_max_inflight_llm_calls: int
@@ -227,6 +229,7 @@ class Settings:
             ),
             kb_dir=os.getenv("KB_DIR", "backend/app/scan/kb"),
             chroma_persist_dir=os.getenv("CHROMA_PERSIST_DIR", str(default_cache_dir / "chroma")),
+            chroma_anonymized_telemetry=_parse_bool(os.getenv("CHROMA_ANONYMIZED_TELEMETRY"), False),
             chroma_collection_code_chunks=os.getenv("CHROMA_COLLECTION_CODE_CHUNKS", "code_chunks"),
             chroma_collection_security_kb=os.getenv("CHROMA_COLLECTION_SECURITY_KB", "security_kb"),
             embedding_model=os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
@@ -241,6 +244,7 @@ class Settings:
             scan_prefilter_enabled=_parse_bool(os.getenv("SCAN_PREFILTER_ENABLED"), True),
             scan_prefilter_min_score=_parse_float(os.getenv("SCAN_PREFILTER_MIN_SCORE"), 0.2),
             scan_prefilter_max_candidates=_parse_int(os.getenv("SCAN_PREFILTER_MAX_CANDIDATES"), 200),
+            scan_candidate_stage_enabled=_parse_bool(os.getenv("SCAN_CANDIDATE_STAGE_ENABLED"), True),
             scan_cache_enabled=_parse_bool(os.getenv("SCAN_CACHE_ENABLED"), True),
             scan_cache_path=os.getenv("SCAN_CACHE_PATH", str(default_cache_dir / "scan_cache.sqlite3")),
             scan_max_inflight_llm_calls=_parse_int(os.getenv("SCAN_MAX_INFLIGHT_LLM_CALLS"), 4),

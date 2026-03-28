@@ -21,7 +21,7 @@ audit --help
 Set `AUDIT_BINARY_BASE_URL` when testing mirrors or non-GitHub release endpoints:
 
 ```bash
-export AUDIT_BINARY_BASE_URL="https://github.com/<owner>/<repo>/releases/download/v0.1.0"
+export AUDIT_BINARY_BASE_URL="https://github.com/<owner>/<repo>/releases/download/v0.2.0"
 ```
 
 The installer appends `/<asset>` and `/audit-checksums.txt` to that base.
